@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f2f78">
+<title>CR 코치</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@500;700;900&display=swap" rel="stylesheet">
+<style>
+/*STYLE*/
+</style>
+<style id="hudCss">
+#miniHud{font-family:'Noto Sans KR',system-ui,sans-serif;background:linear-gradient(180deg,#123279,#0b1f4d);color:#fff;padding:10px;border-radius:14px;border:3px solid #061335;min-width:300px}
+#miniHud .hrow{display:flex;gap:6px}
+#miniHud .hb{flex:1;border-radius:10px;padding:4px 8px;border:2px solid #061335;text-align:center}
+#miniHud .hb small{display:block;font-size:11px;opacity:.85;font-weight:700}
+#miniHud .hb b{font-size:28px;line-height:1.1;text-shadow:0 2px 0 #000}
+#miniHud .hb.opp{background:linear-gradient(180deg,#ff8af1,#a321b0)}
+#miniHud .hb.me{background:linear-gradient(180deg,#6cc3ff,#2775e0)}
+#miniHud .hb.tm{background:linear-gradient(180deg,#3a4f80,#22325a)}
+#miniHud .hrec{margin-top:8px;background:#b9ff8f;color:#123;border-radius:10px;padding:7px 9px;font-size:15px;border:2px solid #061335}
+#miniHud .hrec small{font-size:12px}
+#miniHud .hhand{margin-top:6px;font-size:12px;font-weight:700;opacity:.9}
+body.pip{margin:0;background:#0b1f4d}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="logo"><div class="crown">👑</div><span class="hd stroke">CR 코치</span></div>
+  <span class="pill pDecks"><span class="ic">🃏</span><span id="pillDecks"></span></span>
+  <span class="pill"><span class="ic">⭐</span><span id="pillMine">내 덱 미설정</span></span>
+  <span class="sp"></span>
+  <span class="keys"><span class="kbd">Space</span>시작 <span class="kbd">1~8</span>상대 <span class="kbd">QWERTYUI</span>내 카드 <span class="kbd">← →</span>라인</span>
+  <button class="btn sm gold" id="btnHelp">도움말</button>
+  <button class="btn sm green" id="btnInstall">📲 앱 설치</button>
+</header>
+
+<!-- ================= 배틀 ================= -->
+<section class="tab on" id="tab-battle">
+<div class="wrap">
+  <div>
+    <div class="panel">
+      <div class="ribbon"><h2>📱 화면 연결</h2><span class="sub" id="capStatus"></span></div>
+      <div class="body">
+        <div class="row"><button class="btn green" id="btnCapture">화면 연결</button><button class="btn" id="btnCalib">경기장 영역 지정</button></div>
+        <div class="row">
+          <label class="tg"><input type="checkbox" id="chkAuto"> 상대 자동 감지</label>
+          <label class="tg"><input type="checkbox" id="chkAutoMine"> 내 카드도 (실험)</label>
+          <label class="tg"><input type="checkbox" id="chkAutoAccept"> 확신하면 자동 기록</label>
+        </div>
+        <div class="row">
+          <label class="tg">감도 <input type="range" id="sens" min="6" max="40" step="1"><span id="sensV"></span></label>
+          <label class="tg">일치 기준 <input type="range" id="thresh" min="60" max="97" step="1"><span id="threshV"></span></label>
+        </div>
+        <div class="row" style="margin-top:10px"><div id="previewBox" style="width:100%"><div id="previewHint">[화면 연결]을 누르고 휴대폰 미러링 창을 선택하세요</div><canvas id="preview" style="display:none"></canvas></div></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="ribbon gold"><h2>❓ 확인이 필요한 감지</h2><span class="sub" id="tplCount"></span></div>
+      <div class="body"><div id="pending"></div></div>
+    </div>
+    <div class="panel">
+      <div class="ribbon red"><h2>🃏 상대가 낸 카드</h2></div>
+      <div class="body">
+        <div class="row">
+          <span class="muted">라인</span>
+          <button class="btn sm laneBtn" data-l="L">← 왼쪽</button><button class="btn sm laneBtn on" data-l="R">오른쪽 →</button>
+          <button class="btn sm gray" id="btnUnknown">? 모름</button><button class="btn sm red" id="btnUndo">↶</button>
+        </div>
+        <input class="field" id="search" placeholder="카드 검색 (예: 페카, 로호, 진눈)" style="width:100%;margin-top:8px">
+        <div class="filters" id="filters"></div>
+        <div id="palette" class="cards"></div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <div class="arena">
+        <div class="timerPill"><span class="lbl">남은 시간</span><span id="timer" class="hd">3:00</span></div><br>
+        <span class="phase hd" id="phase">대기 중</span>
+        <div class="ctrls">
+          <button class="btn gold big" id="btnStart">⚔️ 경기 시작</button>
+          <button class="btn sm" id="btnMinus">-1초</button><button class="btn sm" id="btnPlus">+1초</button>
+          <button class="btn sm red" id="btnReset">초기화</button>
+          <button class="btn sm" id="btnPip">🪟 미니 창</button>
+        </div>
+      </div>
+      <div class="elixir2">
+        <div class="ecol">
+          <div class="bigdrop"><div class="shape"></div><div class="num hd" id="elixirNum">5</div></div>
+          <div class="elixirSide"><div class="top"><span class="ttl hd">상대 엘릭서</span><span class="muted" id="leakInfo"></span></div><div class="segbar" id="segbar"></div></div>
+        </div>
+        <div class="ecol me">
+          <div class="bigdrop me"><div class="shape"></div><div class="num hd" id="elixirNumMe">5</div></div>
+          <div class="elixirSide"><div class="top"><span class="ttl hd">내 엘릭서</span><span class="muted" id="leakInfoMe"></span></div><div class="segbar me" id="segbarMe"></div></div>
+        </div>
+        <div class="ediff hd" id="ediff"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="ribbon green"><h2>🏟 3D 실시간 전술판</h2><span class="sub" id="arenaHint"></span></div>
+      <div class="body" style="padding:8px">
+        <div class="arenaWrap"><canvas id="arena3d"></canvas></div>
+        <div id="recBox" class="recBox"></div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <div class="ribbon green"><h2>💡 실시간 코칭</h2></div>
+      <div class="body"><div id="tips"></div></div>
+    </div>
+    <div class="panel">
+      <div class="ribbon"><h2>🙋 내 카드 (누르면 냈다고 기록)</h2></div>
+      <div class="body"><div class="slots" id="myHand"></div></div>
+    </div>
+    <div class="panel">
+      <div class="ribbon red"><h2>🎴 상대 덱 · 사이클</h2><span class="sub" id="deckCount"></span></div>
+      <div class="body"><div class="slots" id="slots"></div><div class="handline" id="handLine"></div></div>
+    </div>
+    <div class="panel">
+      <div class="ribbon purple"><h2>🔍 상대 덱 추정</h2></div>
+      <div class="body"><div class="guess" id="guess"></div><div id="oppInfo"></div></div>
+    </div>
+    <div class="panel">
+      <div class="ribbon"><h2>📜 플레이 기록</h2></div>
+      <div class="body"><div id="log"></div></div>
+    </div>
+  </div>
+</div>
+<div id="hudHome"><div id="miniHud" style="display:none"></div></div>
+</section>
+
+<!-- ================= 덱 사전 ================= -->
+<section class="tab" id="tab-decks">
+  <div class="dwrap">
+    <div class="panel"><div class="body">
+      <div class="dhead">
+        <button class="btn sm dmode on" data-m="decks">덱 사전</button><button class="btn sm dmode" data-m="cards">카드 도감</button>
+        <input class="field" id="dsearch" placeholder="덱 별명·카드 검색 (예: 페틀램, 순호, 무덤, 히벌룬)" style="flex:1;min-width:220px">
+        <div class="filters" id="afilters" style="margin:0"></div>
+      </div>
+      <div class="muted" id="dcount"></div>
+    </div></div>
+    <div class="dgrid" id="dgrid"></div>
+  </div>
+</section>
+
+<!-- ================= 영상 학습 ================= -->
+<section class="tab" id="tab-video">
+  <div class="wrap vwrap">
+    <div>
+      <div class="panel">
+        <div class="ribbon purple"><h2>🎬 영상 불러오기</h2><span class="sub" id="vStatus"></span></div>
+        <div class="body">
+          <div class="row"><label class="btn green">📁 영상 파일 열기<input type="file" id="vFile" accept="video/*" hidden></label></div>
+          <div class="row"><input class="field" id="vYTUrl" placeholder="유튜브 링크 붙여넣기" style="flex:1;min-width:180px"><button class="btn sm" id="vYTBtn">열기</button></div>
+          <div class="row"><button class="btn sm" id="vCapBtn">🖥 이 탭 화면 공유</button><button class="btn sm" id="vCalib">경기장 영역 지정</button><button class="btn sm gold" id="vRun">▶ 자동 분석 시작</button></div>
+          <div class="vbox"><video id="vVideo" controls style="display:none"></video><div id="vYT"></div></div>
+          <div id="vPreviewBox" class="row" style="margin-top:8px"><canvas id="vPreview" style="display:none;max-width:100%"></canvas></div>
+          <p class="muted">유튜브는 영상 화면을 직접 읽을 수 없어서, 이 탭을 화면 공유하는 방식으로 분석해요. 영상 파일은 바로 분석돼요. 위쪽 진영은 상대, 아래쪽 진영은 영상 속 선수로 기록돼요.</p>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="ribbon gold"><h2>❓ 감지된 장면 확인</h2></div>
+        <div class="body"><div id="vPending"></div></div>
+      </div>
+    </div>
+    <div>
+      <div class="panel">
+        <div class="ribbon green"><h2>✍️ 직접 표시하기</h2><span class="sub" id="vArenaHint"></span></div>
+        <div class="body">
+          <div class="row"><button class="btn sm vside on" data-s="opp">상대가 냄</button><button class="btn sm vside" data-s="me">선수가 냄</button><span class="muted">→ 카드 선택 → 경기장에서 위치 누르기</span></div>
+          <input class="field" id="vSearch" placeholder="카드 검색" style="width:100%;margin-top:8px">
+          <div class="filters" id="vFilters"></div>
+          <div id="vPalette" class="cards" style="max-height:180px;overflow:auto"></div>
+          <div class="arenaWrap" style="margin-top:8px"><canvas id="vArena"></canvas></div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="panel">
+        <div class="ribbon"><h2>🧠 학습 결과</h2><span class="sub" id="vCount"></span></div>
+        <div class="body">
+          <select class="field" id="vHeatSel" style="width:100%"></select>
+          <div id="vPatterns" style="margin-top:8px;max-height:420px;overflow:auto;display:flex;flex-direction:column;gap:5px"></div>
+          <div class="row" style="margin-top:10px"><button class="btn sm" id="vExport">내보내기</button><label class="btn sm">가져오기<input type="file" id="vImport" accept="application/json" hidden></label><button class="btn sm red" id="vClear">초기화</button></div>
+          <p class="muted">학습한 대응 패턴은 배틀 코치의 추천에 바로 반영돼요. 같은 상황에서 프로가 자주 쓴 카드와 실제 놓은 위치를 우선 추천해요.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 뉴스 ================= -->
+<section class="tab" id="tab-news">
+  <div class="dwrap" style="max-width:900px">
+    <div class="panel">
+      <div class="ribbon"><h2>📰 클래시로얄 뉴스</h2><button class="btn sm gold" style="margin-left:auto" id="btnNews">새로고침</button></div>
+      <div class="body"><div class="muted" id="newsStatus"></div><div id="newsList" class="newsList"></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 프로 운영 ================= -->
+<section class="tab" id="tab-pro"><div class="dwrap" id="proWrap"></div></section>
+
+<!-- ================= 설정 ================= -->
+<section class="tab" id="tab-settings">
+  <div class="dwrap" style="max-width:900px">
+    <div class="panel" id="acctPanel">
+      <div class="ribbon"><h2>👤 계정 · 동기화</h2><span class="sub" id="acctSub">로그인하면 학습 데이터가 내 모든 기기에 맞춰져요</span></div>
+      <div class="body">
+        <div id="acctOut">
+          <div class="row"><input class="field" id="acEmail" type="email" autocomplete="email" placeholder="이메일" style="flex:1;min-width:180px"><input class="field" id="acPw" type="password" autocomplete="current-password" placeholder="비밀번호 (8자 이상)" style="flex:1;min-width:160px"></div>
+          <div class="row" id="acJoinRow" style="display:none"><input class="field" id="acNick" placeholder="닉네임 (2~16자)" maxlength="16" style="flex:1;min-width:160px"><label class="tg"><input type="checkbox" id="acAge"> 만 14세 이상이에요</label></div>
+          <div class="row"><button class="btn green" id="acLogin">로그인</button><button class="btn" id="acJoin">회원가입</button><span class="muted" id="acMsg"></span></div>
+        </div>
+        <div id="acctIn" style="display:none">
+          <div class="row"><b id="acName" style="font-size:18px"></b><span class="muted" id="acMail"></span></div>
+          <div class="row muted" id="acSyncInfo"></div>
+          <div class="row"><button class="btn green sm" id="acSync">지금 동기화</button><button class="btn sm" id="acNickBtn">닉네임 변경</button><button class="btn sm" id="acPwBtn">비밀번호 변경</button><button class="btn sm" id="acLogout">로그아웃</button><button class="btn sm red" id="acDelete">회원 탈퇴</button></div>
+          <div class="muted" id="acDevices"></div>
+        </div>
+        <details style="margin-top:8px"><summary class="muted">서버 주소</summary><div class="row"><input class="field" id="acServer" placeholder="https://api.내도메인.com" style="flex:1"><button class="btn sm" id="acServerSave">저장</button><button class="btn sm" id="acServerTest">연결 확인</button></div></details>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="ribbon"><h2>⚙️ 설정</h2></div>
+      <div class="body">
+        <div class="row"><label class="tg"><input type="checkbox" id="chkTTS"> 음성 안내 (휴대폰만 보고 플레이할 때 추천)</label></div>
+        <div class="row"><label class="tg"><input type="checkbox" id="chkTriple"> 연장 마지막 1분 3배 엘릭서</label></div>
+        <div class="row"><label class="tg">모르는 카드 비용 <input class="field" type="number" id="unkCost" min="1" max="9" step="0.5" style="width:80px"></label></div>
+        <div class="row"><label class="tg">내 덱 <select class="field" id="mySel" style="min-width:240px"></select></label></div>
+        <div class="row"><label class="tg"><input type="checkbox" id="chkImg"> 카드 이미지 표시</label></div>
+        <div class="row"><label class="tg" style="flex:1">이미지 주소 형식 <input class="field" id="imgTpl" style="flex:1"></label></div>
+        <div class="row"><button class="btn red sm" id="btnClearTpl">화면 인식 학습 데이터 지우기</button></div>
+      </div>
+    </div>
+    <div class="panel" id="guidePanel">
+      <div class="ribbon gold"><h2>📱 사용 방법</h2></div>
+      <div class="body pro">
+        <ol>
+          <li><b>PC + 휴대폰 미러링(추천)</b>: 안드로이드는 <code>scrcpy</code>, 아이폰은 Mac의 'iPhone 미러링'으로 휴대폰 화면을 PC에 띄우고 [화면 연결]을 누르세요.</li>
+          <li>[경기장 영역 지정]으로 상대 킹 타워 위 끝부터 내 킹 타워 아래 끝까지 드래그하세요. 분홍 점선 두 줄이 강 위아래에 오면 맞아요.</li>
+          <li>설정이나 덱 사전에서 <b>내 덱</b>을 고르세요. 손에 있는 카드로만 추천하고 내 엘릭서도 계산해요.</li>
+          <li>경기가 시작되면 <span class="kbd" style="color:#333;border-color:#999">Space</span>. 상대 카드는 자동 감지되거나 팔레트에서 누르고, 3D 경기장에서 놓은 위치를 누르면 위치까지 반영돼요.</li>
+          <li>내가 카드를 내면 <b>내 카드</b> 칸이나 추천 카드를 누르세요(단축키 Q~I).</li>
+          <li><b>🪟 미니 창</b>을 켜면 다른 창 위에 항상 떠 있는 작은 코치 창이 생겨요. <b>음성 안내</b>를 켜면 휴대폰만 보고 플레이해도 돼요.</li>
+          <li>⚠️ 게임 중 화면을 자동으로 분석하는 도구는 Supercell 이용약관에 따라 계정 제재를 받을 수 있어요. 직접 입력만 써도 모든 기능이 동작해요.</li>
+        </ol>
+        <p class="muted">이 앱은 팬이 만든 비공식 도구이며 Supercell과 제휴·후원·승인 관계가 없습니다. 카드 이미지와 명칭의 권리는 Supercell에 있어요.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<nav class="bottomnav">
+  <div class="nb on" data-tab="battle"><span class="i">⚔️</span>배틀</div>
+  <div class="nb" data-tab="decks"><span class="i">🃏</span>덱·카드</div>
+  <div class="nb" data-tab="video"><span class="i">🎬</span>영상 학습</div>
+  <div class="nb" data-tab="news"><span class="i">📰</span>뉴스</div>
+  <div class="nb" data-tab="pro"><span class="i">🏆</span>프로</div>
+  <div class="nb" data-tab="settings"><span class="i">⚙️</span>설정</div>
+</nav>
+<div id="toast"></div>
+<div class="modal" id="modal"><div class="panel"><div class="ribbon purple"><h2 id="mTitle"></h2><button class="btn sm red" style="margin-left:auto" id="mClose">닫기</button></div><div class="body" id="mBody"></div></div></div>
+
+<template id="installTpl">
+  <div class="install">
+    <div class="ins"><h3>🤖 안드로이드 (APK)</h3><ol><li>아래 버튼으로 <b>CR-Coach.apk</b>를 받아요.</li><li>파일을 열면 '출처를 알 수 없는 앱 설치'를 허용하라고 나와요. 허용 후 설치하세요.</li><li>앱의 배틀 화면에서 <b>📱 휴대폰 실시간 코치 시작</b> → '다른 앱 위에 표시' 허용 → 화면 녹화 [시작].</li><li>클래시로얄을 켜면 게임 위에 작은 코치 창이 떠요. 처음 한 번만 ⚙로 경기장·엘릭서 바 위치를 맞추면, 게임 중엔 아무것도 누르지 않아도 돼요.</li></ol><a class="btn green" data-dl="android">APK 받기</a></div>
+    <div class="ins"><h3>🍎 iPhone · iPad (IPA)</h3><ol><li><b>CR-Coach.ipa</b>(서명 없는 테스트 버전)를 PC나 Mac으로 받아요.</li><li>PC/Mac에 <b>Sideloadly</b>(또는 AltStore)를 설치하고 iPhone을 케이블로 연결 → IPA를 끌어놓고 무료 Apple ID로 로그인하면 설치돼요.</li><li>설정 → 일반 → VPN 및 기기 관리에서 내 Apple ID를 '신뢰', iOS 16 이상은 설정 → 개인정보 보호 및 보안 → <b>개발자 모드</b>도 켜요.</li><li>무료 Apple ID로 설치하면 7일마다 다시 설치해야 해요. 현재 iOS 버전은 화면 자동 인식이 없어서 PC 앱에 미러링해서 쓰는 방식이 가장 정확해요.</li></ol><a class="btn green" data-dl="ios">IPA 받기</a></div>
+    <div class="ins"><h3>🪟 Windows (EXE)</h3><ol><li><b>CR-Coach-Setup.exe</b>를 받아 실행해요.</li><li>'Windows의 PC 보호' 창이 뜨면 [추가 정보] → [실행].</li><li>PC 앱은 미러링 창 자동 인식과 항상 위 미니 창을 지원해요.</li></ol><a class="btn green" data-dl="win">EXE 받기</a></div>
+    <div class="ins"><h3>💻 macOS (DMG)</h3><ol><li><b>CR-Coach.dmg</b>를 열고 앱을 응용 프로그램 폴더로 옮겨요.</li><li>처음 실행할 때 앱을 우클릭 → [열기]를 눌러요.</li><li>시스템 설정 → 개인정보 보호 → 화면 기록에서 CR 코치를 허용하세요.</li></ol><a class="btn green" data-dl="mac">DMG 받기</a></div>
+    <p class="muted">다운로드 링크는 앱 빌드를 배포하면 연결돼요.</p>
+  </div>
+</template>
+
+<script>
+/*DATA*/
+</script>
+<script>
+/*LOGIC*/
+</script>
+<script>
+/*ARENA*/
+</script>
+<script>
+/*UI*/
+</script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+{
+  "name": "cr-coach",
+  "productName": "CR 코치",
+  "version": "1.0.0",
+  "description": "클래시로얄 실시간 코치 — 엘릭서 카운팅, 덱 추정, 3D 배치 추천",
+  "main": "electron/main.js",
+  "author": "CR Coach",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "build:web": "python3 scripts/build.py",
+    "start": "electron .",
+    "dist:win": "electron-builder --win nsis --x64",
+    "dist:mac": "electron-builder --mac dmg --universal",
+    "cap:sync": "npx cap sync",
+    "android:debug": "npx cap sync android && cd android && ./gradlew assembleDebug",
+    "android:release": "npx cap sync android && cd android && ./gradlew assembleRelease"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/ios": "^7.0.0",
+    "@capacitor-community/text-to-speech": "^6.0.0",
+    "@capacitor/keep-awake": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^7.0.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.crcoach.app",
+    "productName": "CR 코치",
+    "directories": { "output": "dist", "buildResources": "resources" },
+    "files": ["electron/**", "www/**", "package.json"],
+    "win": { "target": "nsis", "icon": "resources/icon.png", "artifactName": "CR-Coach-Setup.${ext}" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "shortcutName": "CR 코치" },
+    "mac": { "target": "dmg", "icon": "resources/icon.png", "category": "public.app-category.games", "artifactName": "CR-Coach.${ext}",
+             "extendInfo": { "NSScreenCaptureUsageDescription": "휴대폰 미러링 화면에서 상대 카드를 인식하기 위해 화면 기록이 필요해요." } }
+  }
+}
