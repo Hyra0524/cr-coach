@@ -1,0 +1,125 @@
+name: 앱 빌드 (APK · IPA · EXE · DMG)
+
+on:
+  push:
+    tags: ['v*']          # v1.0.0 같은 태그를 올리면 4종 빌드 + 릴리스 생성
+  workflow_dispatch:      # GitHub Actions 탭에서 수동 실행
+
+permissions:
+  contents: write
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: python3 scripts/build.py
+      - name: 카드 이미지 내려받기 (앱에 내장)
+        run: node scripts/fetch-cards.js
+      - uses: actions/upload-artifact@v4
+        with: { name: www, path: www }
+
+  android:
+    needs: web
+    runs-on: ubuntu-latest
+    env:
+      HAS_KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: www, path: www }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - run: npm install
+      - run: npx cap add android || true
+      - name: 휴대폰 화면 실시간 코치(네이티브) 넣기
+        run: node scripts/patch-android.js
+      - run: npx capacitor-assets generate --android || true
+      - run: npx cap sync android
+      - name: 서명 키 준비 (선택)
+        if: env.HAS_KS == 'true'
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
+          printf '%s\n' "android { signingConfigs { release { storeFile file('release.keystore'); storePassword System.getenv('KS_PASS'); keyAlias System.getenv('KS_ALIAS'); keyPassword System.getenv('KS_KEY_PASS') } } buildTypes { release { signingConfig signingConfigs.release } } }" >> android/app/build.gradle
+      - name: APK 빌드
+        env:
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KS_KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          cd android
+          if [ -f app/release.keystore ]; then ./gradlew assembleRelease; cp app/build/outputs/apk/release/app-release.apk ../CR-Coach.apk; \
+          else ./gradlew assembleDebug; cp app/build/outputs/apk/debug/app-debug.apk ../CR-Coach.apk; fi
+      - uses: actions/upload-artifact@v4
+        with: { name: android, path: CR-Coach.apk }
+
+  ios:
+    needs: web
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: www, path: www }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install
+      - run: npx cap add ios || true
+      - run: npx capacitor-assets generate --ios || true
+      - run: npx cap sync ios
+      - name: IPA 빌드 (서명 없음 → AltStore/Sideloadly로 설치)
+        run: |
+          cd ios/App
+          if [ -d App.xcworkspace ]; then SRC="-workspace App.xcworkspace"; else SRC="-project App.xcodeproj"; fi
+          xcodebuild $SRC -scheme App -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -archivePath $PWD/build/App.xcarchive archive CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+          test -d build/App.xcarchive/Products/Applications/App.app
+          mkdir -p Payload && cp -R build/App.xcarchive/Products/Applications/App.app Payload/
+          zip -qr ../../CR-Coach.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with: { name: ios, path: CR-Coach.ipa }
+
+  desktop:
+    needs: web
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            cmd: npm run dist:win
+          - os: macos-latest
+            cmd: npm run dist:mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: www, path: www }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install
+      - run: ${{ matrix.cmd }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [android, ios, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/CR-Coach.apk
+            out/CR-Coach.ipa
+            out/*.exe
+            out/*.dmg
