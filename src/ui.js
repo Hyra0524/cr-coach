@@ -363,17 +363,18 @@ function render(){
 
   // 3D 상태: 위치 + 속도(전술판이 프레임마다 부드럽게 이어서 그림), 화면에서 실제로 추적 중이면 live
   const oppUnits = [], paths = [], nowMs = performance.now();
-  S.plays.filter(p=>!p.corr && !p.ability && CARDS[p.id] && t - p.t < (CARDS[p.id].type==='s' && !CARDS[p.id].tags.includes('win') ? 2.5 : 14)).forEach(p=>{
-    const tp = threatPosition(p, t); if (!tp) return;
-    if (CARDS[p.id].type==='t' && tp.arrived && t-p.t>9) return;
-    const tp2 = threatPosition(p, t + 0.5), vx = tp2 ? (tp2.x - tp.x)*2 : 0, vy = tp2 ? (tp2.y - tp.y)*2 : 0;
-    const isThreat = rec && rec.threat === p;
-    oppUnits.push({id:p.id, name:CARDS[p.id].name, x:tp.x, y:tp.y, vx, vy, at:nowMs, live: !!(p.live && t - p.live.t < 0.8), eta: isThreat && !tp.arrived ? tp.eta : null, born: t - p.t, cost: t - p.t < 1.4 ? playCost(S.plays, S.plays.indexOf(p), S.settings.unknownCost) : null,
-      label: isThreat ? `${CARDS[p.id].name}${tp.eta>0.5?` · ${tp.eta.toFixed(0)}초`:''}` : ''});
-    if (isThreat && !tp.arrived) paths.push([{x:tp.x,y:tp.y}, ...(tp.y<16 && !CARDS[p.id].air ? [{x:p.lane==='L'?3.5:14.5,y:16}] : []), {x:p.lane==='L'?3.5:14.5,y:24}]);
+  // 실제로 본 것만 그림: 화면에서 지금 따라가는 위치(live), 또는 방금 놓은 자리(1.5초). 예상 경로로 '상상해서' 움직이지 않음
+  S.plays.filter(p=>!p.corr && !p.ability && CARDS[p.id]).forEach(p=>{
+    const age = t - p.t, live = p.live && t - p.live.t < 0.6 ? p.live : null;
+    if (!live && age > 1.5) return;
+    const pos = live || (p.x != null ? {x:p.x, y:p.y} : null); if (!pos) return;
+    const isThreat = rec && rec.threat === p, tp = isThreat ? threatPosition(p, t) : null;
+    const name = p.id === 'unknown' ? (p.guess && CARDS[p.guess] ? CARDS[p.guess].name+'?' : '?') : CARDS[p.id].name;
+    oppUnits.push({id:p.id, name, x:pos.x, y:pos.y, at:nowMs, live:!!live, eta: tp && !tp.arrived ? tp.eta : null, born: age,
+      cost: age < 1.4 ? playCost(S.plays, S.plays.indexOf(p), S.settings.unknownCost) : null,
+      label: isThreat ? `${name}${tp && tp.eta>0.5?` · ${tp.eta.toFixed(0)}초`:''}` : ''});
   });
-  S.plays.filter(p=>p.id==='unknown' && !p.corr && t - p.t < 1.5 && p.x != null).forEach(p=>oppUnits.push({id:'unknown', name: p.guess && CARDS[p.guess] ? CARDS[p.guess].name+'?' : '?', x:p.x, y:p.y, at:nowMs, born:t-p.t, cost: p.cost, live:false}));
-  const mineUnits = S.mine.filter(p=>!p.corr && CARDS[p.id] && t - p.t < 8 && p.x!=null).map(p=>({id:p.id, name:CARDS[p.id].name, x:p.x, y:p.y, at:nowMs, born:t-p.t, cost: t - p.t < 1.4 ? (CARDS[p.id].cost) : null}));
+  const mineUnits = S.mine.filter(p=>!p.corr && CARDS[p.id] && t - p.t < 1.5 && p.x!=null).map(p=>({id:p.id, name:CARDS[p.id].name, x:p.x, y:p.y, at:nowMs, born:t-p.t, cost: t - p.t < 1.4 ? (CARDS[p.id].cost) : null}));
   const recs = rec ? rec.recs.slice(0,1).map(r=>({id:r.id, name:CARDS[r.id].name, x:r.x, y:r.y, label:`여기에 ${CARDS[r.id].name}`})) : [];
   arena.set({opp:oppUnits, mine:mineUnits, recs, paths, hint: rec && rec.recs.length ? `${rec.mode==='defend'?'수비':rec.mode==='attack'?'공격':'사이클'}: ${CARDS[rec.recs[0].id].name} · ${rec.recs[0].when}` : ''});
   if (S.placeArm && performance.now() > S.placeArm.until){ S.placeArm=null; $('arenaHint').textContent=''; }
@@ -664,8 +665,10 @@ function onDeploy(ev, src){
   if (!S.started || src === 'video') return src === 'video' ? onVideoEvent(ev) : undefined;
   if (!visionOK()) return;
   const last = ev.stage === 2;
-  const thumb = ev.stage === 0 || !findByVid(ev.vid, src) ? rgbThumb(ev.rgb) : null;
   let cur = findByVid(ev.vid, src);
+  // 0.9초 만에 사라진 작은 것 = 깜빡임·효과 → 기록 취소
+  if (ev.cancel){ if (cur){ cur.arr.splice(cur.arr.indexOf(cur.p), 1); render(); } return; }
+  const thumb = ev.stage === 0 || !cur ? rgbThumb(ev.rgb) : null;
   // 진영: 화면 + 내가 실제로 낸 카드로 확정 (내 엘릭서 바를 읽고 있을 때)
   let side = ev.side, mineRef = null;
   if (myTrackingOn()){
@@ -690,6 +693,11 @@ function onDeploy(ev, src){
   const before = p.id;
   const J = judgeOpp(ev, p);
   if (J.noise){ if (cur) S.plays.splice(S.plays.indexOf(p), 1); render(); return; }
+  // 상대가 이 시각에 카드를 낼 수가 없는 상황(최대 엘릭서 < 1)인데 확실하지도 않음 → 기록하지 않고 확인 목록으로만
+  if (!cur && !J.ok && simulate(S.plays, ev.t, opts()).hi < 1){
+    if (last) addPending({ref:nextRef('o'), side:'top', t:ev.t, x:ev.x, y:ev.y, thumb:rgbThumb(ev.rgb), feats:ev.feats, cands:J.R.list.slice(0,4).map(x=>({id:x.id, score:x.p}))});
+    return;
+  }
   applyOppJudge(p, J);
   p.x = ev.x; p.y = ev.y; p.lane = laneOf(ev.x);
   if (!cur) S.plays.push(p);
@@ -795,12 +803,12 @@ function syncLivePositions(){
 
 /* ---------- 영역 맞추기 (경기장 · 엘릭서 바 · 내 카드 4장 · 다음 카드) ---------- */
 const CAL_STEPS = [
-  {key:'arena', label:'경기장', msg:'상대 킹 타워 위 끝부터 내 킹 타워 아래 끝까지 드래그하세요. 분홍 점선 두 줄이 강의 위·아래에 오면 정확해요.', color:'#ffd84d', minH:0.2},
+  {key:'arena', label:'경기장', taps:true, msg:'① 위쪽(상대) 왼편 작은 타워 한가운데를 누르고 ② 아래쪽(내) 오른편 작은 타워 한가운데를 누르세요. 노란 네모 6개가 타워 위에, 분홍 띠가 강 위에 오면 정확해요. 다시 누르면 처음부터.', color:'#ffd84d', minH:0.2},
   {key:'bar', label:'엘릭서 바', msg:'화면 맨 아래 분홍색 엘릭서 바(숫자 오른쪽 막대)만 감싸세요. 눈금 10칸이 바의 칸과 맞으면 정확해요.', color:'#ff7bd5', minH:0.005},
   {key:'hand', label:'내 카드 4장', msg:'아래쪽 내 카드 4장을 한 번에 감싸세요. 세로선 3개가 카드 사이 틈에 오면 정확해요.', color:'#6fd3ff', minH:0.03},
   {key:'next', label:'다음 카드', msg:'왼쪽 아래 작은 \'다음\' 카드만 감싸세요. 없으면 [건너뛰기].', color:'#8dff7a', minH:0.02, optional:true},
 ];
-const CAL_DEFAULT = {arena:{x:0.02, y:0.075, w:0.96, h:0.70}, bar:{x:0.27, y:0.948, w:0.70, h:0.022}};
+const CAL_DEFAULT = {arena:{x:0.177, y:0.10, w:0.645, h:0.66}, bar:{x:0.27, y:0.948, w:0.70, h:0.022}};
 function calDefault(key, rects){
   if (CAL_DEFAULT[key]) return Object.assign({}, CAL_DEFAULT[key]);
   const b = (rects && rects.bar) || CAL_DEFAULT.bar;
@@ -816,8 +824,11 @@ function drawCalGuides(ctx, key, rc, W, H, active){
   ctx.strokeStyle = st.color; ctx.lineWidth = 2.5; ctx.strokeRect(x, y, w, h);
   ctx.setLineDash([6,4]); ctx.lineWidth = 1.5;
   if (key === 'arena'){
-    ctx.strokeStyle = '#ff8af1'; [15/32, 17/32].forEach(f=>{ ctx.beginPath(); ctx.moveTo(x, y+h*f); ctx.lineTo(x+w, y+h*f); ctx.stroke(); });
-    ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.beginPath(); ctx.moveTo(x+w/2, y); ctx.lineTo(x+w/2, y+h); ctx.stroke();
+    // 강(15~17칸) 띠 + 타워 6개 위치
+    ctx.setLineDash([]); ctx.fillStyle = 'rgba(255,138,241,.22)'; ctx.fillRect(x, y+h*15/32, w, h*2/32);
+    ctx.strokeStyle = '#ff8af1'; ctx.lineWidth = 1.5; [15/32, 17/32].forEach(f=>{ ctx.beginPath(); ctx.moveTo(x, y+h*f); ctx.lineTo(x+w, y+h*f); ctx.stroke(); });
+    ctx.strokeStyle = '#ffd84d'; ctx.lineWidth = 2;
+    [[2,5,5,8],[13,5,16,8],[2,24,5,27],[13,24,16,27],[7,1,11,5],[7,27,11,31]].forEach(([a,b,c,d])=>ctx.strokeRect(x+w*a/18, y+h*b/32, w*(c-a)/18, h*(d-b)/32));
   } else if (key === 'bar'){
     ctx.setLineDash([]); ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 1;
     for (let i=1;i<10;i++){ ctx.beginPath(); ctx.moveTo(x+w*i/10, y); ctx.lineTo(x+w*i/10, y+h); ctx.stroke(); }
@@ -827,11 +838,49 @@ function drawCalGuides(ctx, key, rc, W, H, active){
   ctx.restore();
 }
 /* 단계별 영역 맞추기: canvas 위에서 드래그. ui = {msg, title, prev, next, reset, cancel} 요소 */
+/* 두 타워를 눌러 경기장 계산: 상대 왼쪽 공주 타워 = (3.5, 6.5)칸, 내 오른쪽 공주 타워 = (14.5, 25.5)칸
+   → 가로 11칸, 세로 19칸 차이로 칸 크기를 구하고 18x32 경기장 전체를 정함. 그 뒤 화면에서 강을 찾아 위아래 위치를 보정 */
+function arenaFromTaps(a, b){
+  const tw = (b.x - a.x)/11, th = (b.y - a.y)/19;
+  if (tw <= 0.005 || th <= 0.005) return null;
+  return {x: a.x - 3.5*tw, y: a.y - 6.5*th, w: 18*tw, h: 32*th};
+}
+function refineArenaByRiver(rc, src){
+  try{
+    const vw = src && (src.videoWidth || src.naturalWidth || src.width), vh = src && (src.videoHeight || src.naturalHeight || src.height);
+    if (!vw || !vh) return rc;
+    const th = rc.h/32, y0 = Math.max(0, rc.y + th*11), y1 = Math.min(1, rc.y + th*21), W = 120, H = 80;
+    const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d', {willReadFrequently:true});
+    x.drawImage(src, (rc.x + rc.w*0.08)*vw, y0*vh, rc.w*0.84*vw, (y1-y0)*vh, 0, 0, W, H);
+    const d = x.getImageData(0, 0, W, H).data, row = [];
+    for (let yy=0; yy<H; yy++){ let n = 0; for (let xx=0; xx<W; xx++){ const k=(yy*W+xx)*4, r=d[k], g=d[k+1], bb=d[k+2]; if (bb > 120 && bb > r + 35 && g > r) n++; } row.push(n/W); }
+    // 강은 두께가 있으니 3줄 평균이 가장 큰 곳
+    let best = -1, bv = 0; for (let yy=1; yy<H-1; yy++){ const v = (row[yy-1]+row[yy]+row[yy+1])/3; if (v > bv){ bv = v; best = yy; } }
+    if (best < 0 || bv < 0.25) return rc;
+    let top = best, bot = best; while (top > 0 && row[top-1] > bv*0.5) top--; while (bot < H-1 && row[bot+1] > bv*0.5) bot++;
+    const riverC = y0 + ((top + bot + 1)/2)/H*(y1 - y0);
+    return Object.assign({}, rc, {y: riverC - rc.h*16/32, river: true});
+  }catch(e){ return rc; }
+}
 function CalibFlow(o){
-  let on = false, step = 0, tmp = null, drag = null;
+  let on = false, step = 0, tmp = null, drag = null, taps = [];
   const ui = o.ui, CAL_STEPS_ = o.steps || CAL_STEPS;
   const toN = e=>{ const r = o.canvas.getBoundingClientRect(); return {x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)), y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))}; };
-  o.canvas.addEventListener('pointerdown', e=>{ if (!on) return; drag = {a:toN(e), b:toN(e)}; o.canvas.setPointerCapture(e.pointerId); e.preventDefault(); });
+  o.canvas.addEventListener('pointerdown', e=>{ if (!on) return; e.preventDefault();
+    const st = CAL_STEPS_[step];
+    if (st.taps){
+      if (taps.length >= 2) taps = [];
+      taps.push(toN(e));
+      if (taps.length === 2){
+        const rc = arenaFromTaps(taps[0], taps[1]);
+        if (!rc){ toast('위쪽 왼편 타워 → 아래쪽 오른편 타워 순서로 눌러주세요'); taps = []; return; }
+        const rf = refineArenaByRiver(rc, o.frame && o.frame());
+        tmp.arena = {x:rf.x, y:rf.y, w:rf.w, h:rf.h};
+        toast(rf.river ? '강 위치로 자동 보정했어요. 노란 네모가 타워에 맞는지 확인하세요' : '노란 네모가 타워에, 분홍 띠가 강에 맞는지 확인하세요');
+      } else ui.msg.textContent = '② 이제 아래쪽(내) 오른편 작은 타워 한가운데를 누르세요.';
+      return;
+    }
+    drag = {a:toN(e), b:toN(e)}; o.canvas.setPointerCapture(e.pointerId); });
   o.canvas.addEventListener('pointermove', e=>{ if (drag) drag.b = toN(e); });
   o.canvas.addEventListener('pointerup', ()=>{ if (!drag) return; const rc = {x:Math.min(drag.a.x,drag.b.x), y:Math.min(drag.a.y,drag.b.y), w:Math.abs(drag.a.x-drag.b.x), h:Math.abs(drag.a.y-drag.b.y)}; drag = null;
     const st = CAL_STEPS_[step]; if (rc.w > 0.04 && rc.h > st.minH) tmp[st.key] = rc; else toast('영역이 너무 작아요'); });
@@ -841,19 +890,21 @@ function CalibFlow(o){
     ui.prev.style.visibility = step ? 'visible' : 'hidden';
     ui.next.textContent = step === CAL_STEPS_.length-1 ? '완료' : (st.optional && !tmp[st.key] ? '건너뛰기' : '다음');
   }
-  ui.prev.onclick = ()=>{ if (step > 0){ step--; sync(); } };
+  ui.prev.onclick = ()=>{ if (step > 0){ step--; taps = []; sync(); } };
   ui.next.onclick = ()=>{ if (step < CAL_STEPS_.length-1){ if (!tmp[CAL_STEPS_[step].key] && !CAL_STEPS_[step].optional) tmp[CAL_STEPS_[step].key] = calDefault(CAL_STEPS_[step].key, tmp); step++; if (!tmp[CAL_STEPS_[step].key] && !CAL_STEPS_[step].optional) tmp[CAL_STEPS_[step].key] = calDefault(CAL_STEPS_[step].key, tmp); sync(); return; } on = false; o.save(tmp); o.end && o.end(true); };
-  ui.reset.onclick = ()=>{ const k = CAL_STEPS_[step].key; tmp[k] = calDefault(k, tmp); };
+  ui.reset.onclick = ()=>{ const k = CAL_STEPS_[step].key; tmp[k] = calDefault(k, tmp); taps = []; };
   ui.cancel.onclick = ()=>{ on = false; o.end && o.end(false); };
   return {
-    start(){ on = true; step = 0; tmp = Object.assign({}, o.rects()); if (!tmp.arena) tmp.arena = calDefault('arena'); sync(); },
+    start(){ on = true; step = 0; taps = []; tmp = Object.assign({}, o.rects()); if (!tmp.arena) tmp.arena = calDefault('arena'); sync(); },
     get on(){ return on; },
     draw(ctx, W, H){
       if (!on) return;
       const cur = CAL_STEPS_[step].key;
       for (const st of CAL_STEPS_){ if (st.key === cur) continue; if (tmp[st.key]) drawCalGuides(ctx, st.key, tmp[st.key], W, H, false); }
       const rc = drag ? {x:Math.min(drag.a.x,drag.b.x), y:Math.min(drag.a.y,drag.b.y), w:Math.abs(drag.a.x-drag.b.x), h:Math.abs(drag.a.y-drag.b.y)} : tmp[cur];
-      if (rc) drawCalGuides(ctx, cur, rc, W, H, true);
+      if (rc && !(CAL_STEPS_[step].taps && taps.length === 1)) drawCalGuides(ctx, cur, rc, W, H, true);
+      if (CAL_STEPS_[step].taps) taps.forEach((t,i)=>{ ctx.save(); ctx.strokeStyle = '#ffd84d'; ctx.fillStyle = 'rgba(255,216,77,.35)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(t.x*W, t.y*H, 9, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#fff'; ctx.font = '900 11px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(i+1), t.x*W, t.y*H); ctx.restore(); });
     },
   };
 }
@@ -872,7 +923,7 @@ const pcVis = newVision('pc', makeGrabber(()=>stream ? video : null), {arenaActi
 const calBar = document.createElement('div'); calBar.className = 'calBar'; calBar.style.display = 'none';
 calBar.innerHTML = '<div class="calTop"><b class="calT"></b><span class="calM"></span></div><div class="row"><button class="btn sm calR">기본값</button><button class="btn sm calC">취소</button><span style="flex:1"></span><button class="btn sm calP">이전</button><button class="btn sm green calN">다음</button></div>';
 $('previewBox').after(calBar);
-const pcCal = CalibFlow({canvas:$('preview'), rects:pcRects,
+const pcCal = CalibFlow({canvas:$('preview'), rects:pcRects, frame:()=>stream ? video : null,
   ui:{title:calBar.querySelector('.calT'), msg:calBar.querySelector('.calM'), prev:calBar.querySelector('.calP'), next:calBar.querySelector('.calN'), reset:calBar.querySelector('.calR'), cancel:calBar.querySelector('.calC')},
   save:r=>{ S.calib = r.arena; S.calib2 = {bar:r.bar, hand:r.hand, next:r.next}; store.set('crc_calib', S.calib); store.set('crc_calib2', S.calib2); toast('영역 저장 완료'); },
   end:()=>{ calBar.style.display = 'none'; $('btnCalib').classList.remove('on'); }});
@@ -962,7 +1013,7 @@ const vTime = ()=> vsrc==='file' ? vvideo.currentTime : (performance.now()/1000)
 const vVis = newVision('video', makeGrabber(vSource), {arenaActive:()=>vAnalyze && (vsrc!=='file' || !vvideo.paused)});
 const vCalBar = document.createElement('div'); vCalBar.className = 'calBar'; vCalBar.style.display = 'none';
 vCalBar.innerHTML = calBar.innerHTML; $('vPreviewBox').after(vCalBar);
-const vcal = CalibFlow({canvas:$('vPreview'), steps:[CAL_STEPS[0]], rects:()=>({arena:S.vcalib}),
+const vcal = CalibFlow({canvas:$('vPreview'), steps:[CAL_STEPS[0]], rects:()=>({arena:S.vcalib}), frame:vSource,
   ui:{title:vCalBar.querySelector('.calT'), msg:vCalBar.querySelector('.calM'), prev:vCalBar.querySelector('.calP'), next:vCalBar.querySelector('.calN'), reset:vCalBar.querySelector('.calR'), cancel:vCalBar.querySelector('.calC')},
   save:r=>{ S.vcalib = r.arena; store.set('crc_vcalib', S.vcalib); toast('경기장 영역 저장 완료'); },
   end:()=>{ vCalBar.style.display = 'none'; }});
@@ -1164,7 +1215,7 @@ function buildOverlay(){
   vb.onclick = ()=>{ store.set('crc_ovvoice', !store.get('crc_ovvoice', true)); setV(); };
   // 영역 맞추기 (경기장 → 엘릭서 바 → 내 카드 4장 → 다음 카드)
   const cv = $('ovCalCv'), cx = cv.getContext('2d'), bg = new Image();
-  const flow = CalibFlow({canvas:cv, rects:()=>({arena:S.pcalib, bar:S.ecalib, hand:S.hcalib.hand || null, next:S.hcalib.next || null}),
+  const flow = CalibFlow({canvas:cv, frame:()=>frameReady ? frameCv : null, rects:()=>({arena:S.pcalib, bar:S.ecalib, hand:S.hcalib.hand || null, next:S.hcalib.next || null}),
     ui:{title:$('ovCalT'), msg:$('ovCalMsg'), prev:$('ovCalPrev'), next:$('ovCalNext'), reset:$('ovCalReset'), cancel:$('ovCalCancel')},
     save:r=>{ S.pcalib = r.arena; S.ecalib = r.bar; S.hcalib = {hand:r.hand, next:r.next}; store.set('crc_pcalib', S.pcalib); store.set('crc_ecalib', S.ecalib); store.set('crc_hcalib', S.hcalib); toast('영역 저장 완료'); },
     end:()=>{ OV.calibOn = false; ovSetMode(OV.more ? 'tall' : 'panel'); }});

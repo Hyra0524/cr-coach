@@ -342,7 +342,7 @@ function Vision(cfg){
         }
         else if (b.stage === 1) b.side = decideSide(b);
         const out = Object.keys(b.acc).map(id=>({id, score:b.acc[id]/b.wsum})).sort((a,c)=>c.score-a.score);
-        const ev = {type: b.emitted ? 'refine' : 'deploy', vid:b.id, src:b.src || b.kind, ephemeral: !!b.ephemeral, colors: {red:b.colors.red, blue:b.colors.blue}, stage:b.stage, kind:b.kind, t:b.t, side:b.side, x:px, y:py, cands:out, rgb:b.rgb, feats:b.feats};
+        const ev = {type: b.emitted ? 'refine' : 'deploy', vid:b.id, src:b.src || b.kind, ephemeral: !!b.ephemeral, cancel: !!b.ephemeral && b.kind !== 'spell' && b.n < 5, colors: {red:b.colors.red, blue:b.colors.blue}, stage:b.stage, kind:b.kind, t:b.t, side:b.side, x:px, y:py, cands:out, rgb:b.rgb, feats:b.feats};
         b.emitted = true; b.stage++;
         cfg.onEvent && cfg.onEvent(ev);
       }
