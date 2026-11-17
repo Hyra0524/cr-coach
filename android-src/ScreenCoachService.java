@@ -63,7 +63,7 @@ public class ScreenCoachService extends Service {
     private boolean ttsReady = false;
     private volatile boolean pageReady = false;
     private volatile boolean busy = false;
-    private int capW = 360, capH = 780, fps = 8;
+    private int capW = 400, capH = 866, fps = 12;
     private String config = "{}";
     private String mode = "panel";
 
@@ -79,8 +79,8 @@ public class ScreenCoachService extends Service {
         Intent data = Build.VERSION.SDK_INT >= 33
                 ? intent.getParcelableExtra("data", Intent.class)
                 : intent.getParcelableExtra("data");
-        capW = Math.max(240, Math.min(720, intent.getIntExtra("width", 360)));
-        fps = Math.max(2, Math.min(15, intent.getIntExtra("fps", 8)));
+        capW = Math.max(240, Math.min(720, intent.getIntExtra("width", 400)));
+        fps = Math.max(2, Math.min(20, intent.getIntExtra("fps", 12)));
         String c = intent.getStringExtra("config");
         if (c != null) config = c;
         if (data == null) { shutdown(); return START_NOT_STICKY; }
@@ -146,12 +146,25 @@ public class ScreenCoachService extends Service {
                 if (pageReady && !busy) {
                     Image img = reader.acquireLatestImage();
                     if (img != null) {
-                        String js = encode(img);
+                        // 캡처 시각 → 코치 창이 지연을 보정 (이미지 자체 시각이 정상 범위면 그걸, 아니면 지금)
+                        final long nowNs = System.nanoTime(), ts = img.getTimestamp();
+                        final long capAt = (ts > 0 && nowNs - ts >= 0 && nowNs - ts < 1000000000L) ? ts : nowNs;
+                        final int fw = img.getWidth(), fh = img.getHeight();
+                        final String b64 = encode(img);
                         img.close();
-                        if (js != null) {
+                        if (b64 != null) {
                             busy = true;
                             main.post(() -> {
                                 if (web == null) { busy = false; return; }
+                                // 코치 창 위치(캡처에선 검게 나옴) → 인식에서 그 영역 제외
+                                String mask = "0,0,0,0";
+                                if (!"full".equals(mode) && web.getWidth() > 0) {
+                                    DisplayMetrics dm = getResources().getDisplayMetrics();
+                                    float sw = Math.min(dm.widthPixels, dm.heightPixels), sh = Math.max(dm.widthPixels, dm.heightPixels);
+                                    mask = (lp.x / sw) + "," + (lp.y / sh) + "," + (web.getWidth() / sw) + "," + (web.getHeight() / sh);
+                                }
+                                long age = (System.nanoTime() - capAt) / 1000000L;
+                                String js = "window.__crFrame&&window.__crFrame('data:image/jpeg;base64," + b64 + "'," + fw + "," + fh + "," + age + "," + mask + ")";
                                 web.evaluateJavascript(js, v -> busy = false);
                             });
                         }
@@ -183,10 +196,9 @@ public class ScreenCoachService extends Service {
         bmp.copyPixelsFromBuffer(buf);
         Bitmap out = bw == w ? bmp : Bitmap.createBitmap(bmp, 0, 0, w, h);
         jpg.reset();
-        out.compress(Bitmap.CompressFormat.JPEG, 60, jpg);
+        out.compress(Bitmap.CompressFormat.JPEG, 68, jpg);
         if (out != bmp) out.recycle();
-        String b64 = Base64.encodeToString(jpg.toByteArray(), Base64.NO_WRAP);
-        return "window.__crFrame&&window.__crFrame('data:image/jpeg;base64," + b64 + "'," + w + "," + h + ")";
+        return Base64.encodeToString(jpg.toByteArray(), Base64.NO_WRAP);
     }
 
     /* ---------------- 게임 위 코치 창 ---------------- */
@@ -197,7 +209,7 @@ public class ScreenCoachService extends Service {
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         int type = Build.VERSION.SDK_INT >= 26 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
-        lp = new WindowManager.LayoutParams(dp(300), dp(190), type, baseFlags(), PixelFormat.TRANSLUCENT);
+        lp = new WindowManager.LayoutParams(dp(300), dp(214), type, baseFlags(), PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.START;
         lp.x = dp(8);
         lp.y = dp(28);
@@ -241,8 +253,8 @@ public class ScreenCoachService extends Service {
             case "full":   // 영역 맞추기: 전체 화면을 덮고 터치를 받음 (캡처에선 검게 → 마지막 프레임으로 맞춤)
                 lp.width = WindowManager.LayoutParams.MATCH_PARENT; lp.height = WindowManager.LayoutParams.MATCH_PARENT;
                 lp.x = 0; lp.y = 0; lp.flags = baseFlags() & ~WindowManager.LayoutParams.FLAG_SECURE; break;
-            case "tall":   lp.width = dp(300); lp.height = dp(360); lp.flags = baseFlags(); break;
-            default:       lp.width = dp(300); lp.height = dp(190); lp.flags = baseFlags();
+            case "tall":   lp.width = dp(300); lp.height = dp(380); lp.flags = baseFlags(); break;
+            default:       lp.width = dp(300); lp.height = dp(214); lp.flags = baseFlags();
         }
         wm.updateViewLayout(web, lp);
     }

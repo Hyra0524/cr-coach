@@ -42,30 +42,98 @@ function playCost(plays, idx, unknownCost){
   }
   return c.cost;
 }
-// 엘릭서 정제소: 15초마다 +1, 약 110초 유지
-function simulate(plays, tNow, opts){
-  const triple = opts.triple, unk = opts.unknownCost;
-  const evs = plays.map((p,i)=>({t:p.t, p, i}));
-  plays.forEach(p=>{ if (p.id === 'collector' && !p.corr){ for (let k=1;k<=7;k++) evs.push({t:p.t + 1 + 15*k, add:1}); } });
-  evs.sort((a,b)=>a.t-b.t);
-  let E = 5, leak = 0, t = 0, k = 0, recentLeak = 0, deficit = 0;
-  const dt = 0.05;
-  const apply = ev=>{
-    if (ev.add){ E += ev.add; if (E > 10){ leak += E-10; E = 10; } return; }
-    if (ev.p.corr){ E = ev.p.value; return; }
-    E -= playCost(plays, ev.i, unk);
-    if (E < 0){ deficit += -E; E = 0; }
-  };
-  while (t < tNow){
-    while (k < evs.length && evs[k].t <= t){ apply(evs[k]); k++; }
-    const step = Math.min(dt, tNow - t);
-    E += rateAt(t, triple) * step;
-    if (E > 10){ const over = E-10; leak += over; if (t > tNow-5) recentLeak += over; E = 10; }
-    t += step;
-  }
-  while (k < evs.length && evs[k].t <= tNow + 1e-9){ apply(evs[k]); k++; }
-  return {E, leak, recentLeak, deficit};
+/* 구간별 회복량을 해석적으로 계산 (시간 간격을 잘게 쪼개는 반복 없이 정확한 값)
+   0~120초 2.8초당 1, 120~240초 2배, 240초~ 3배(설정) */
+function phaseList(triple){ return [[0,120,1/2.8],[120,240,2/2.8],[240,1e9,(triple?3:2)/2.8]]; }
+function regenBetween(t0, t1, triple){
+  let g = 0;
+  for (const [a,b,r] of phaseList(triple)){ const s = Math.max(a,t0), e = Math.min(b,t1); if (e > s) g += (e-s)*r; }
+  return g;
 }
+// t0부터 need 만큼 회복되는 시각
+function timeToGain(t0, need, triple){
+  if (need <= 0) return t0;
+  let t = t0;
+  for (const [a,b,r] of phaseList(triple)){
+    if (b <= t) continue;
+    const s = Math.max(a,t), cap = (b-s)*r;
+    if (need <= cap) return s + need/r;
+    need -= cap; t = b;
+  }
+  return Infinity;
+}
+/* 한 번 낸 카드의 비용과 비용 범위 [lo, hi]
+   - 아는 카드: 고정 / 미러: 직전 카드 +1 / 모르는 카드: 화면 인식 후보·덱 추정으로 좁힌 범위(p.costLo~p.costHi) */
+function playCostRange(plays, idx, unknownCost){
+  const p = plays[idx];
+  if (p.corr) return {c:0, lo:0, hi:0};
+  if (p.ability){ const c = p.cost || 0; return {c, lo:c, hi:c}; }
+  const C = _CARDS[p.id];
+  if (!C || p.id === 'unknown'){
+    const c = p.cost != null ? p.cost : unknownCost;
+    return {c, lo: p.costLo != null ? p.costLo : Math.min(c, 1), hi: p.costHi != null ? p.costHi : Math.max(c, 7)};
+  }
+  if (C.tags.includes('mirror')){
+    for (let j = idx-1; j >= 0; j--){
+      if (plays[j].corr || plays[j].ability) continue;
+      const r = playCostRange(plays, j, unknownCost);
+      return {c:Math.min(10, r.c+1), lo:Math.min(10, r.lo+1), hi:Math.min(10, r.hi+1)};
+    }
+    return {c:unknownCost, lo:2, hi:9};
+  }
+  return {c:C.cost, lo:C.cost, hi:C.cost};
+}
+/* 엘릭서 시뮬레이션 (점 추정 E + 가능한 범위 [lo, hi])
+   - 범위는 '모르는 카드 비용', '자동 감지 시각 오차'에서 생기고, 엘릭서가 10에 막히면 저절로 좁혀져요
+   - 카드를 냈다는 건 그 순간 엘릭서가 최소 그 비용만큼 있었다는 뜻 → 하한을 끌어올려 스스로 보정
+   - 엘릭서 정제소: 배치 1초 뒤부터 15초마다 +1, 7회 (2026년 10월 밸런스 기준 수명 1분 50초) */
+const DETECT_JITTER = 0.15;
+function simulate(plays, tNow, opts){
+  const triple = !!opts.triple, unk = opts.unknownCost != null ? opts.unknownCost : 4;
+  const evs = [];
+  plays.forEach((p,i)=>{
+    if (p.t > tNow + 1e-9) return;
+    evs.push({t:p.t, p, i});
+    if (p.id === 'collector' && !p.corr && !p.ability) for (let k=1;k<=7;k++){ const te = p.t + 1 + 15*k; if (te <= tNow) evs.push({t:te, add:1, sure:k<=2}); }
+  });
+  evs.sort((a,b)=>a.t-b.t || (a.add?1:0)-(b.add?1:0));
+  let E = 5, lo = 5, hi = 5, t = 0, leak = 0, recentLeak = 0, deficit = 0, fullSince = null;
+  const w0 = tNow - 5;
+  const advance = t1=>{
+    if (t1 <= t) return;
+    const g = regenBetween(t, t1, triple);
+    if (E + g > 10){
+      const tc = timeToGain(t, 10 - E, triple);
+      leak += E + g - 10;
+      if (t1 > w0) recentLeak += regenBetween(Math.max(tc, w0), t1, triple);
+      if (fullSince == null) fullSince = tc;
+      E = 10;
+    } else { E += g; if (E < 9.999) fullSince = null; }
+    lo = Math.min(10, lo + g); hi = Math.min(10, hi + g);
+    t = t1;
+  };
+  for (const ev of evs){
+    advance(ev.t);
+    if (ev.add){ E = Math.min(10, E+1); hi = Math.min(10, hi+1); if (ev.sure) lo = Math.min(10, lo+1); continue; }
+    const p = ev.p;
+    if (p.corr){ E = lo = hi = Math.max(0, Math.min(10, p.value)); continue; }
+    const r = playCostRange(plays, ev.i, unk);
+    // 실제로 냈으니 그 순간 엘릭서는 최소 r.lo 이상이었음
+    if (hi < r.lo){ deficit += r.lo - hi; hi = r.lo; }
+    lo = Math.max(lo, r.lo);
+    if (E < r.c){ if (r.lo === r.hi) deficit += r.c - E; E = Math.min(hi, Math.max(E, r.lo)); }
+    E = Math.max(0, E - Math.min(r.c, E));
+    lo = Math.max(0, lo - r.hi); hi = Math.max(0, hi - r.lo);
+    if (p.auto){ lo = Math.max(0, lo - DETECT_JITTER); hi = Math.min(10, hi + DETECT_JITTER); }
+    if (E < lo) E = lo; if (E > hi) E = hi;
+    fullSince = null;
+  }
+  advance(tNow);
+  if (E < lo) E = lo; if (E > hi) E = hi;
+  return {E, lo, hi, leak, recentLeak, deficit, fullFor: fullSince != null ? tNow - fullSince : 0, rate: rateAt(tNow, triple)};
+}
+// 엘릭서 e가 되기까지 남은 시간 (현재 E 기준)
+function secondsUntil(E, target, tNow, triple){ return target <= E ? 0 : timeToGain(tNow, target - E, triple) - tNow; }
 
 /* ---------- 카드 사이클 ---------- */
 function analyzeDeck(plays){
@@ -80,6 +148,116 @@ function analyzeDeck(plays){
     else status[id] = seq.length >= 4 ? {where:'hand'} : {where:'queue', returnsIn:null};
   }
   return {seq, known, last4, status, hand: known.filter(id=>status[id].where==='hand'), next: seq.length>=4 ? last4[0] : null, full: known.length===8};
+}
+/* 손패 확률 모델
+   덱 8장 = 손패 4 + 대기열 4. 방금 낸 4장은 대기열에 있고(다시 나오려면 4장을 더 내야 함),
+   나머지 8 - min(4, n)장 중 4장이 손에 있어요. → 아직 안 낸 카드가 손에 있을 확률 = 4 / (8 - min(4,n)) */
+function handModel(plays, inf){
+  const deck = analyzeDeck(plays);
+  const n = deck.seq.length, recent = new Set(deck.last4.filter(id=>id !== 'unknown'));
+  const free = 8 - Math.min(4, n), pIn = Math.min(1, 4/free);
+  const cards = {};
+  for (const id of deck.known) cards[id] = recent.has(id) ? {p:0, returnsIn: deck.status[id].returnsIn} : {p:pIn};
+  const unseen = 8 - deck.known.length;
+  if (inf && inf.predicted) for (const pr of inf.predicted) cards[pr.id] = {p: pIn * pr.prob, predicted:true};
+  return {cards, pIn, unseen, n, deck};
+}
+/* 상대가 방금 낸 카드가 무엇일지 '문맥' 확률 (화면 인식 결과와 곱해서 최종 판정)
+   - 대기열에 있는(최근 4장) 카드는 낼 수 없음 → 아주 낮게 (감지 실수 대비 0.02)
+   - 손에 있을 카드 → 높게, 아직 안 나온 카드는 덱 추정 확률로 나눔
+   - 엘릭서 상한보다 비싼 카드 → 낮게 */
+function contextPrior(plays, inf, oppHi){
+  const hm = handModel(plays, inf), P = {}, CY = {};
+  const all = Object.keys(_CARDS).filter(k=>k!=='unknown' && !k.endsWith('_air'));
+  const known = hm.deck.known.length;
+  const unseenMass = known >= 8 ? 0.02 : Math.max(0.08, hm.unseen / (8 - Math.min(4, hm.n)));
+  let predSum = 0; for (const id in hm.cards) if (hm.cards[id].predicted) predSum += hm.cards[id].p;
+  for (const id of all){
+    let w;
+    const c = hm.cards[id];
+    if (c && !c.predicted){ w = 1; CY[id] = c.p > 0 ? 1 : 0.05; }
+    else if (c && c.predicted) w = unseenMass * 0.75 * (c.p / (predSum || 1)) * 4;
+    else w = unseenMass * (known >= 8 ? 0.2 : 0.35) * 4 / all.length;
+    if (oppHi != null && _CARDS[id].cost > oppHi + 1.2 && !_CARDS[id].tags.includes('mirror')) w *= 0.15;
+    P[id] = w * (CY[id] != null ? CY[id] : 1);
+  }
+  let s = 0; for (const id in P) s += P[id];
+  for (const id in P) P[id] /= s;
+  // 사이클(대기열에 있어서 못 냄)은 게임 규칙이라 완화하지 않도록 따로 표시
+  Object.defineProperty(P, 'cycle', {value: CY, enumerable: false});
+  return P;
+}
+/* 화면 인식 유사도 + 문맥 확률 → 최종 확률
+   cands: [{id, score}] (학습한 카드만), score는 0~1 유사도
+   학습 안 된 카드는 '기본 유사도'로 취급해서 문맥만으로도 후보가 될 수 있게 */
+/* 외형 증거 (항상 '닮을수록 증거가 커지는' 단조 함수)
+   학습된 카드 c: 30 x (c 점수 - 다른 학습 카드 최고 점수) + 20 x (c 점수 - 기준점)
+     기준점 = '같은 카드' 평균과 '다른 카드 중 가장 닮은 것' 평균의 중간 (학습 데이터에서 잼)
+   학습 안 된 카드: 0 (외형으로는 판단 불가 → 문맥으로)
+   학습은 됐는데 점수가 없으면: 아주 낮게 */
+function identify(cands, prior, opts){
+  opts = opts || {};
+  const cal = opts.calib || {gm:0.85, im:0.75};
+  const mid = (cal.gm + cal.im)/2;
+  const sims = {}; let ignore = null;
+  for (const c of cands || []){ if (c.id === '__ignore'){ ignore = c.score; continue; } if (_CARDS[c.id]) sims[c.id] = c.score; }
+  const learned = opts.learned || new Set(Object.keys(sims));
+  const sv = Object.entries(sims).sort((a,b)=>b[1]-a[1]);
+  const top1 = sv[0] ? sv[0][1] : null, top2 = sv[1] ? sv[1][1] : (top1 != null ? top1 - 0.1 : null);
+  const evOf = id=>{ const sc = sims[id]; const other = sv[0] && sv[0][0] === id ? top2 : top1; return Math.max(-9, Math.min(10, 30*(sc - other) + 38*(sc - mid))); };
+  const ids = prior ? Object.keys(prior) : Object.keys(sims);
+  const lg = {}; let mx = -1e9;
+  for (const id of ids){
+    const pr = prior ? prior[id] : 1; if (!pr) continue;
+    const hasTpl = sims[id] != null, isL = learned.has(id);
+    const ev = hasTpl ? evOf(id) : isL ? -6 : 0;
+    // 문맥 확률은 덱 DB가 완전하지 않아 과신하기 쉬움 → 0.55제곱으로 완화
+    const cy = prior && prior.cycle && prior.cycle[id] != null ? prior.cycle[id] : 1;
+    const v = ev + 0.55*Math.log(pr/cy) + Math.log(cy);
+    lg[id] = {v, hasTpl, s: hasTpl ? sims[id] : null, ev}; if (v > mx) mx = v;
+  }
+  // '카드 아님'으로 학습된 장면과 가장 닮았으면 그 가능성도 후보로
+  if (ignore != null){ const ev = Math.max(-9, Math.min(9, 30*(ignore - (top1 != null ? top1 : 0.5)) + 20*(ignore - mid))); const v = ev + Math.log(0.08); lg.__ignore = {v, hasTpl:true, s:ignore, ev}; if (v > mx) mx = v; }
+  let z = 0; for (const id in lg){ lg[id].e = Math.exp(lg[id].v - mx); z += lg[id].e; }
+  const out = [];
+  for (const id in lg) out.push({id, p: lg[id].e / z, sim: lg[id].s, tpl: lg[id].hasTpl, ev: lg[id].ev});
+  out.sort((a,b)=>b.p-a.p);
+  const list = out.filter(x=>x.id !== '__ignore');
+  return {list: list.slice(0, 8), ignore: lg.__ignore ? lg.__ignore.e/z : 0, best: out[0] || null};
+}
+/* 진영 보정: 화면 위치·색만으로 애매한 경우를 '내가 실제로 낸 카드'(엘릭서 하락·손패 변화)로 확정
+   myEvents: 내 플레이 [{t, id?}] — 한 플레이는 배치 하나만 가져갈 수 있어요(claimed)
+   - 내 진영(아래)에 생겼는데 가져갈 내 플레이가 없음 → 상대 주문 또는 포켓 배치
+   - 상대 진영(위)에 생겼는데 그 시각 내가 낸 '주문'이 아직 배치를 못 찾음 → 내 주문 */
+function myPlayWindow(m){ const c = m.id && _CARDS[m.id]; return c && c.type === 's' ? 2.8 : 0.9; }
+function resolveSide(ev, myEvents){
+  const free = (myEvents || []).filter(m=>!m.claimed && ev.t - m.t > -0.5 && ev.t - m.t < myPlayWindow(m));
+  if (ev.side === 'bottom'){
+    if (!free.length){
+      // 작고 애매한 변화(타워 화살 착지 등)는 상대 빨간색이 보일 때만 상대 것으로, 아니면 버림
+      const red = ev.colors ? ev.colors.red : 0, blue = ev.colors ? ev.colors.blue : 0;
+      if (ev.src === 'small' && !(red >= 6 && red > blue*1.5)) return {side:'none', why:'noise'};
+      return {side:'top', why:'no-my-play'};
+    }
+    const m = free.sort((a,b)=>Math.abs(ev.t-a.t)-Math.abs(ev.t-b.t))[0]; m.claimed = true;
+    return {side:'bottom', why:'my-play', mine:m};
+  }
+  const sp = free.find(m=>m.id && _CARDS[m.id] && _CARDS[m.id].type === 's' && ev.t - m.t > 0.3);
+  if (sp){ sp.claimed = true; return {side:'bottom', why:'my-spell', mine:sp}; }
+  return {side: ev.side, why:'vision'};
+}
+// 엘릭서 하락(drop)과 손패 변화(myplay)를 하나의 '내 플레이' 목록으로
+function mergeMyEvents(drops, myplays){
+  const out = myplays.map(m=>({t:m.t, id:m.id, ref:m.ref}));
+  for (const d of drops) if (!myplays.some(m=>m.ref === d.ref || Math.abs(m.t - d.t) < 0.25)) out.push({t:d.t, cost:d.cost, ref:d.ref});
+  return out.sort((a,b)=>a.t-b.t);
+}
+// 후보 확률로 비용 기대값·범위 계산 (모르는 카드의 엘릭서 계산용)
+function costFromPosterior(list){
+  let ev = 0, ps = 0, lo = 99, hi = 0;
+  for (const x of list){ const c = _CARDS[x.id]; if (!c || c.tags.includes('mirror')) continue; ev += c.cost * x.p; ps += x.p; if (x.p >= 0.08){ lo = Math.min(lo, c.cost); hi = Math.max(hi, c.cost); } }
+  if (!ps) return null;
+  return {c: Math.round(ev/ps*2)/2, lo: lo === 99 ? 1 : lo, hi: hi || 9};
 }
 // 내 덱 손패: 4장 이상 내면 정확, 그 전엔 낸 카드만 대기열
 function myHandOf(deckCards, myPlays){
@@ -228,9 +406,11 @@ function defaultDeploy(id, lane){
 function threatPosition(play, tNow){
   const c = _CARDS[play.id]; if (!c) return null;
   const lane = play.lane || laneOf(play.x);
-  const start = {x:play.x, y:play.y};
+  // 화면에서 실제로 따라가고 있는 위치가 있으면 그 위치에서 출발 (배치 지연 1초는 이미 지남)
+  const live = play.live && tNow - play.live.t < 0.8 ? play.live : null;
+  const start = live ? {x:live.x, y:live.y} : {x:play.x, y:play.y};
   const tower = MY_TOWER[lane];
-  const dtm = Math.max(0, tNow - play.t - 1);
+  const dtm = live ? Math.max(0, tNow - live.t) : Math.max(0, tNow - play.t - 1);
   const v = SPEED_TPS[c.spd] || 0;
   if (c.type !== 't' || !v) return {x:start.x, y:start.y, eta:0, lane, arrived:true};
   const path = [];
@@ -376,9 +556,9 @@ function buildTips(ctx){
   if (!started){ add('idle', 10, '경기 카운트다운이 끝나면 Space 또는 [경기 시작]을 누르세요.'); return tips; }
   if (rec && rec.recs.length){
     const r = rec.recs[0], c = _CARDS[r.id];
-    if (rec.mode === 'defend') add('rec:'+rec.threat.t+r.id, 95, `🛡 ${_CARDS[rec.threat.id].name} → ${c.name} · ${r.when} · ${r.how}`, `${c.name}, ${r.when}`);
-    if (rec.mode === 'attack') add('rec:atk'+Math.floor(t/8), 92, `⚔️ ${rec.headline} · ${r.how}`, `공격 기회, ${c.name}`);
-    if (rec.mode === 'cycle') add('rec:cyc'+Math.floor(t/10), 50, `♻️ ${c.name}을(를) ${r.how}에`);
+    if (rec.mode === 'defend') add('rec:'+rec.threat.t+r.id, 95, `${_CARDS[rec.threat.id].name} → ${c.name} · ${r.when} · ${r.how}`, `${c.name}, ${r.when}`);
+    if (rec.mode === 'attack') add('rec:atk'+Math.floor(t/8), 92, `${rec.headline} · ${r.how}`, `공격 기회, ${c.name}`);
+    if (rec.mode === 'cycle') add('rec:cyc'+Math.floor(t/10), 50, `${c.name}을(를) ${r.how}에`);
   }
   const seq = deck.seq, last = seq[seq.length-1], sinceLast = last ? t - last.t : 99;
   if (E <= 2.5 && t > 8) add('low', 90, `상대 엘릭서 ${E.toFixed(1)}! 지금 반대 라인을 공격하세요`, '상대 엘릭서 부족, 지금 공격');
@@ -501,4 +681,4 @@ function detectEvents(hist, T, bottom){
 }
 function deckAvg(d){ return d.c.reduce((s,id)=>s+(_CARDS[id]?_CARDS[id].cost:0),0)/d.c.length; }
 
-if (typeof module !== 'undefined') module.exports = {rateAt, phaseAt, playCost, simulate, analyzeDeck, myHandOf, inferDecks, counterScore, cscore, counterCardsFor, weakAgainst, goodAgainst, deckMatchup, threatPosition, placementFor, attackPlacement, recommend, buildTips, learnPatterns, heatmapFor, detectEvents, deckAvg, defaultDeploy, laneOf, GC, GR};
+if (typeof module !== 'undefined') module.exports = {resolveSide, mergeMyEvents, regenBetween, timeToGain, playCostRange, secondsUntil, handModel, contextPrior, identify, costFromPosterior, rateAt, phaseAt, playCost, simulate, analyzeDeck, myHandOf, inferDecks, counterScore, cscore, counterCardsFor, weakAgainst, goodAgainst, deckMatchup, threatPosition, placementFor, attackPlacement, recommend, buildTips, learnPatterns, heatmapFor, detectEvents, deckAvg, defaultDeploy, laneOf, GC, GR};

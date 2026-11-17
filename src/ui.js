@@ -25,11 +25,13 @@ const S = {
   plays:[],   // 상대
   mine:[],    // 나
   pending:[], lane:'R', placeArm:null,
-  settings: Object.assign({tts:false, triple:true, sens:16, thresh:82, auto:true, autoAccept:true, autoMine:false, unknownCost:4, myDeck:null, imgOn:true, imgTpl:IMG_DEFAULT}, store.get('crc_settings', {})),
+  settings: Object.assign({bgm:true, sfx:true, sndVol:50, tts:false, triple:true, sens:16, thresh:60, auto:true, autoAccept:true, autoMine:false, autoStart:true, visV:0, unknownCost:4, myDeck:null, imgOn:true, imgTpl:IMG_DEFAULT}, store.get('crc_settings', {})),
   calib: store.get('crc_calib', null),
   vcalib: store.get('crc_vcalib', null),
   vlog: store.get('crc_vlog', []),
 };
+// 인식 엔진 v2: '일치 기준'이 확률(%)로 바뀜 → 예전 기본값(82)은 새 기본값(60)으로
+if (S.settings.visV < 2){ if (S.settings.thresh >= 80) S.settings.thresh = 60; S.settings.visV = 2; try{ localStorage.setItem('crc_settings', JSON.stringify(S.settings)); }catch(e){} }
 const OVL = location.hash === '#overlay';
 const OV = {e:null, hist:[], lastSeen:0, lastDrop:0, ref:0, calibOn:false, mode:'panel', regen:[], shifted2:false, shifted3:false};
 if (OVL){ document.body.classList.add('overlay'); try{ if (window.CRNative && !localStorage.getItem('crc_settings')){ const cfg=JSON.parse(CRNative.getConfig()||'{}'); Object.keys(cfg).forEach(k=>{ if (/^crc_/.test(k) && cfg[k]!=null) localStorage.setItem(k, cfg[k]); }); S.settings=Object.assign(S.settings, store.get('crc_settings',{})); } }catch(e){} }
@@ -50,6 +52,7 @@ function speak(key, text){
   const base = key.split(':')[0], now = performance.now();
   if (lastSpoken[base] && now - lastSpoken[base] < 6000) return;
   lastSpoken[base] = now;
+  try{ if (window.SND) SND.duck(); }catch(e){}
   if (window.CRNative && CRNative.speak){ try{ CRNative.speak(text); }catch(e){} return; }
   if (!('speechSynthesis' in window)) return;
   const capTTS = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TextToSpeech;
@@ -69,8 +72,8 @@ function imgObj(id){
   return imgCache[u].failed ? null : imgCache[u];
 }
 function typeIcon(c){
-  if (c.rarity === 'ch') return '👑'; if (c.type === 's') return '✨'; if (c.type === 'b') return '🏰';
-  if (c.air) return '🪽'; if (c.tags.includes('win')) return '🎯'; return '⚔️';
+  if (c.rarity === 'ch') return '챔피언'; if (c.type === 's') return '주문'; if (c.type === 'b') return '건물';
+  if (c.air) return '공중'; if (c.tags.includes('win')) return '승리'; return '유닛';
 }
 function cardEl(id, o){
   o = o || {};
@@ -104,7 +107,7 @@ $('mClose').onclick = ()=> $('modal').classList.remove('on');
 $('modal').onclick = e=>{ if (e.target.id==='modal') $('modal').classList.remove('on'); };
 $('btnHelp').onclick = ()=>{ document.querySelector('.nb[data-tab="settings"]').click(); $('guidePanel').scrollIntoView({behavior:'smooth'}); };
 $('btnInstall').onclick = ()=>{
-  openModal('📲 앱 설치 안내', $('installTpl').content.cloneNode(true));
+  openModal('앱 설치 안내', $('installTpl').content.cloneNode(true));
   $('mBody').querySelectorAll('[data-dl]').forEach(a=>{ const u = DOWNLOADS[a.dataset.dl]; if (u){ a.href = u; a.target='_blank'; } else a.onclick = e=>{ e.preventDefault(); toast('설치 파일은 빌드를 배포한 뒤 이 버튼에 연결돼요'); }; });
 };
 $('pillDecks').textContent = `덱 ${DECKS.length}종 · 카드 ${CARD_DATA.length-1}장`;
@@ -112,21 +115,23 @@ $('pillDecks').textContent = `덱 ${DECKS.length}종 · 카드 ${CARD_DATA.lengt
 /* ---------- 설정 ---------- */
 function syncSettingsUI(){
   $('sens').value=S.settings.sens; $('thresh').value=S.settings.thresh;
-  $('chkAuto').checked=S.settings.auto; $('chkAutoAccept').checked=S.settings.autoAccept; $('chkAutoMine').checked=S.settings.autoMine;
+  $('chkAuto').checked=S.settings.auto; $('chkAutoAccept').checked=S.settings.autoAccept; $('chkAutoMine').checked=S.settings.autoMine; $('chkAutoStart').checked=S.settings.autoStart;
   $('chkTTS').checked=S.settings.tts; $('chkTriple').checked=S.settings.triple; $('unkCost').value=S.settings.unknownCost;
   $('chkImg').checked=S.settings.imgOn; $('imgTpl').value=S.settings.imgTpl;
   $('sensV').textContent=S.settings.sens; $('threshV').textContent=S.settings.thresh+'%';
+  try{ syncSoundUI(); if (window.SND) SND.apply(); }catch(e){}
   const md = myDeck(); $('pillMine').textContent = md ? `내 덱: ${md.n}` : '내 덱 미설정';
   $('mySel').value = S.settings.myDeck == null ? '' : String(S.settings.myDeck);
 }
 $('mySel').innerHTML = '<option value="">선택 안 함</option>' + DECKS.map((d,i)=>`<option value="${i}">${esc(d.n)} · ${esc(d.v)}</option>`).join('');
-const setMyDeck = i => { S.settings.myDeck = i; saveSettings(); syncSettingsUI(); renderDecks(); renderMyHand(); lastGuessKey=''; };
+const setMyDeck = i => { S.settings.myDeck = i; saveSettings(); syncSettingsUI(); renderDecks(); renderMyHand(); lastGuessKey=''; try{ refreshHandPool(); }catch(e){} };
 $('mySel').onchange = e=> setMyDeck(e.target.value==='' ? null : +e.target.value);
 $('sens').oninput = e=>{ S.settings.sens=+e.target.value; saveSettings(); syncSettingsUI(); };
 $('thresh').oninput = e=>{ S.settings.thresh=+e.target.value; saveSettings(); syncSettingsUI(); };
 $('chkAuto').onchange = e=>{ S.settings.auto=e.target.checked; saveSettings(); };
 $('chkAutoAccept').onchange = e=>{ S.settings.autoAccept=e.target.checked; saveSettings(); };
 $('chkAutoMine').onchange = e=>{ S.settings.autoMine=e.target.checked; saveSettings(); };
+$('chkAutoStart').onchange = e=>{ S.settings.autoStart=e.target.checked; saveSettings(); };
 $('chkTTS').onchange = e=>{ S.settings.tts=e.target.checked; saveSettings(); if (e.target.checked) speak('test','음성 안내를 켰어요'); };
 $('chkTriple').onchange = e=>{ S.settings.triple=e.target.checked; saveSettings(); };
 $('unkCost').onchange = e=>{ S.settings.unknownCost=Math.max(1,Math.min(9,+e.target.value||4)); saveSettings(); };
@@ -138,23 +143,49 @@ syncSettingsUI();
 function makeBar(el, onSet){
   const segs = [];
   for (let i=0;i<10;i++){ const s=document.createElement('div'); s.className='seg'; s.innerHTML=`<div class="f"></div><span>${i+1}</span>`; el.appendChild(s); segs.push(s.firstChild); }
+  const rng = document.createElement('div'); rng.className = 'rng'; el.appendChild(rng);
   el.onclick = e=>{
     if (!S.started){ toast('경기를 시작한 뒤 보정할 수 있어요'); return; }
     const r = el.getBoundingClientRect(); onSet(Math.max(0, Math.min(10, Math.round(((e.clientX-r.left)/r.width)*10*2)/2)));
   };
-  return v => segs.forEach((f,i)=>{ f.style.width = Math.max(0,Math.min(1, v - i))*100 + '%'; });
+  return (v, lo, hi) => {
+    segs.forEach((f,i)=>{ f.style.width = Math.max(0,Math.min(1, v - i))*100 + '%'; });
+    if (lo != null && hi - lo >= 0.3){ rng.style.display = 'block'; rng.style.left = lo*10 + '%'; rng.style.width = (hi-lo)*10 + '%'; } else rng.style.display = 'none';
+  };
 }
+function paintElixir(sim, simMe){
+  $('elixirNum').textContent = sim.E >= 9.95 ? '10' : sim.E.toFixed(1); setOppBar(sim.E, sim.lo, sim.hi);
+  $('elixirNumMe').textContent = simMe.E >= 9.95 ? '10' : simMe.E.toFixed(1); setMyBar(simMe.E, simMe.lo, simMe.hi);
+  const diff = sim.E - simMe.E;
+  $('ediff').textContent = S.started ? (Math.abs(diff)<0.5 ? '엘릭서 비슷' : diff>0 ? `상대가 ${diff.toFixed(1)} 앞섬` : `내가 ${(-diff).toFixed(1)} 앞섬`) : '';
+  $('ediff').className = 'ediff ' + (!S.started || Math.abs(diff) < 0.5 ? '' : diff > 0 ? 'bad' : 'good');
+}
+// 숫자만 빠르게 (초당 15번): 엘릭서가 실제로 차오르는 게 부드럽게 보이도록
+let fastLast = 0;
+function fastTick(now){
+  if (S.started && now - fastLast > 66){
+    fastLast = now; const t = gameTime();
+    const sim = simulate(S.plays, t, opts()), simMe = simulate(S.mine, t, opts());
+    const live = myLiveE(); if (live != null){ simMe.E = live; simMe.lo = simMe.hi = live; }
+    paintElixir(sim, simMe);
+    $('timer').textContent = t < 180 ? fmt(180-t) : fmt(Math.max(0,300-t));
+    if (OVL && $('ovRoot')){ $('ovOE').textContent = fmtE1(sim.E); $('ovBE').textContent = fmtE1(sim.E); $('ovME').textContent = fmtE1(simMe.E); setEBar($('ovOBar'), sim.E, sim.lo, sim.hi); setEBar($('ovMBar'), simMe.E, simMe.E, simMe.E); }
+  }
+  requestAnimationFrame(fastTick);
+}
+requestAnimationFrame(fastTick);
 const setOppBar = makeBar($('segbar'), v=>{ S.plays.push({t:gameTime(), corr:true, value:v}); toast(`상대 엘릭서를 ${v}로 보정`); render(); });
 const setMyBar = makeBar($('segbarMe'), v=>{ S.mine.push({t:gameTime(), corr:true, value:v}); toast(`내 엘릭서를 ${v}로 보정`); render(); });
 
 /* ---------- 경기 제어 ---------- */
 function startGame(){
-  S.started=true; S.startAt=performance.now(); S.offset=0; S.endedAt=null; S.plays=[]; S.mine=[]; S.pending=[];
+  try{ if (window.SND) SND.fx('start'); }catch(e){}
+  S.started=true; S.startAt=performance.now(); S.offset=0; S.endedAt=null; S.plays=[]; S.mine=[]; S.pending=[]; S.handLive=null; S.autoDeck=[]; VIS.forEach(v=>v.reset());
   try{ const ka = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.KeepAwake; if (ka) ka.keepAwake(); }catch(e){}
-  renderPending(); $('btnStart').textContent='🏁 경기 종료'; $('btnStart').classList.replace('gold','red');
+  renderPending(); $('btnStart').textContent='경기 종료'; $('btnStart').classList.replace('gold','red');
   toast('경기 시작! 양쪽 엘릭서를 5부터 계산해요'); speak('start','경기 시작');
 }
-function endGame(){ S.endedAt=gameTime(); S.started=false; $('btnStart').textContent='⚔️ 경기 시작'; $('btnStart').classList.replace('red','gold'); toast('경기 종료'); }
+function endGame(){ try{ if (window.SND) SND.fx('end'); }catch(e){} S.endedAt=gameTime(); S.started=false; $('btnStart').textContent='경기 시작'; $('btnStart').classList.replace('red','gold'); toast('경기 종료'); }
 $('btnStart').onclick = ()=> S.started ? endGame() : startGame();
 $('btnMinus').onclick = ()=>{ S.offset-=1; render(); };
 $('btnPlus').onclick = ()=>{ S.offset+=1; render(); };
@@ -166,7 +197,7 @@ function recordPlay(id, extra){
   const pos = extra && extra.x != null ? {x:extra.x, y:extra.y} : defaultDeploy(id, lane);
   const p = Object.assign({t:gameTime(), id, lane: laneOf(pos.x), x:pos.x, y:pos.y}, extra||{});
   S.plays.push(p);
-  if (!extra || extra.x == null){ S.placeArm = {who:'opp', p, until:performance.now()+5000}; $('arenaHint').textContent='📍 3D 경기장에서 놓은 위치를 누르면 더 정확해져요 (5초)'; }
+  if (!extra || extra.x == null){ S.placeArm = {who:'opp', p, until:performance.now()+5000}; $('arenaHint').textContent='전술판에서 놓은 위치를 누르면 더 정확해져요 (5초)'; }
   render();
 }
 function recordMine(id, extra){
@@ -221,12 +252,13 @@ function renderMyHand(){
   const el=$('myHand'); el.innerHTML='';
   const md = myDeck();
   if (!md){ el.innerHTML='<div class="muted">설정이나 덱 사전에서 <b>내 덱</b>을 고르면 내 엘릭서·손패를 계산하고 손에 있는 카드로만 추천해요.</div>'; return; }
-  const h = myHandOf(md.c, S.mine);
+  const h = liveHand(md);
   md.c.forEach((id,i)=>{
     const w=document.createElement('div'); w.className='slot';
     const inHand = h.known ? h.hand.includes(id) : !h.queue.includes(id);
+    if (h.live && h.next === id){ w.title = '다음에 들어올 카드'; }
     w.appendChild(cardEl(id,{mini:true, evo:md.e.includes(id), hero:md.h.includes(id), ghost:!inHand, onclick:()=>recordMine(id)}));
-    const s=document.createElement('span'); s.className='st '+(inHand?'hand':'queue'); s.textContent = (inHand?'손패':'대기')+' · '+'QWERTYUI'[i]; w.appendChild(s);
+    const s=document.createElement('span'); s.className='st '+(inHand?'hand':'queue'); s.textContent = (inHand?'손패':(h.live && h.next===id ? '다음' : '대기'))+' · '+'QWERTYUI'[i]; w.appendChild(s);
     el.appendChild(w);
   });
 }
@@ -287,51 +319,61 @@ function openCardModal(id){
 }
 
 /* ---------- 렌더 ---------- */
-let prevTipKeys = new Set(), lastGuessKey = '', lastRec = null;
+let prevTipKeys = new Set(), lastGuessKey = '', lastRec = null, lastSim = null;
+function myLiveE(){ return S.started && S.myLive && performance.now() - S.myLive.at < 800 ? S.myLive.v : null; }
+function liveHand(md){
+  const h = S.handLive && performance.now() - S.handLive.at < 2500 ? S.handLive : null;
+  if (h && h.slots.filter(Boolean).length >= 3) return {known:true, hand:h.slots.filter(Boolean), next:h.next, live:true};
+  return md ? myHandOf(md.c, S.mine) : null;
+}
+const myCardsNow = md=> md ? md.c : (S.autoDeck.length === 8 ? S.autoDeck : null);
 function render(){
   const t = gameTime();
+  syncLivePositions();
   const sim = simulate(S.plays, t, opts());
   const md = myDeck();
   const simMe = simulate(S.mine, t, opts());
-  if (OV.e != null && S.started) simMe.E = OV.e;
+  const live = myLiveE(); if (live != null){ simMe.E = live; simMe.lo = simMe.hi = live; }
   const deck = analyzeDeck(S.plays), inf = inferDecks(deck.known);
   const ph = phaseAt(t, S.settings.triple);
-  const hand = md ? myHandOf(md.c, S.mine) : null;
-  const rec = S.started ? recommend({t, oppPlays:S.plays, myCards: md?md.c:null, myHand:hand, myE:simMe.E, oppE:sim.E, triple:S.settings.triple, patterns:PATTERNS}) : null;
-  lastRec = rec;
+  const hand = liveHand(md);
+  const rec = S.started ? recommend({t, oppPlays:S.plays, myCards: myCardsNow(md), myHand:hand, myE:simMe.E, oppE:sim.E, triple:S.settings.triple, patterns:PATTERNS}) : null;
+  lastRec = rec; lastSim = {sim, simMe};
 
   $('timer').textContent = t < 180 ? fmt(180-t) : fmt(Math.max(0,300-t));
   const pe=$('phase'); pe.textContent = S.started ? ph.label : (S.endedAt?'경기 종료':'대기 중'); pe.className='phase hd '+(S.started?ph.cls:'');
-  $('elixirNum').textContent = sim.E >= 9.95 ? '10' : sim.E.toFixed(1); setOppBar(sim.E);
-  $('elixirNumMe').textContent = simMe.E >= 9.95 ? '10' : simMe.E.toFixed(1); setMyBar(simMe.E);
-  $('leakInfo').textContent = `낭비 ${sim.leak.toFixed(1)}` + (sim.deficit>0.5?` · 보정 ${sim.deficit.toFixed(1)}`:'');
-  $('leakInfoMe').textContent = `낭비 ${simMe.leak.toFixed(1)}`;
-  const diff = sim.E - simMe.E; $('ediff').textContent = S.started ? (Math.abs(diff)<0.5 ? '엘릭서 비슷' : diff>0 ? `상대가 ${diff.toFixed(1)} 앞섬` : `내가 ${(-diff).toFixed(1)} 앞섬`) : '';
+  paintElixir(sim, simMe);
+  $('leakInfo').textContent = (sim.hi - sim.lo >= 0.3 ? `범위 ${sim.lo.toFixed(1)}~${sim.hi.toFixed(1)} · ` : '정확 · ') + `낭비 ${sim.leak.toFixed(1)}`;
+  $('leakInfoMe').textContent = (live != null ? '화면에서 읽는 중 · ' : '') + `낭비 ${simMe.leak.toFixed(1)}`;
 
   // 추천 카드
   const rb=$('recBox'); rb.innerHTML='';
   if (!S.started){ rb.innerHTML='<div class="muted">경기를 시작하면 상대 카드와 양쪽 엘릭서를 보고 낼 카드와 위치를 알려줘요.</div>'; }
   else if (!rec || !rec.recs.length){ rb.innerHTML=`<div class="recHead">${esc(rec?rec.headline:'')}</div>`; }
   else {
-    rb.innerHTML = `<div class="recHead ${rec.mode}">${rec.mode==='defend'?'🛡 수비':rec.mode==='attack'?'⚔️ 공격':'♻️ 사이클'} · ${esc(rec.headline)}</div>`;
+    rb.innerHTML = `<div class="recHead ${rec.mode}">${rec.mode==='defend'?'수비':rec.mode==='attack'?'공격':'사이클'} · ${esc(rec.headline)}</div>`;
     rec.recs.forEach((r,i)=>{
       const row=document.createElement('div'); row.className='recRow'+(i===0?' best':'');
       row.appendChild(cardEl(r.id,{mini:true, onclick:()=>recordMine(r.id, {x:r.x, y:r.y})}));
       const tx=document.createElement('div'); tx.className='recTx';
-      tx.innerHTML = `<b>${i+1}. ${esc(CARDS[r.id].name)}</b> <span class="chip" style="background:#2775e0">${esc(r.when)}</span>${r.inHand===false?' <span class="chip" style="background:#d33030">손에 없음</span>':''}${r.wait>0.3?` <span class="chip" style="background:#c47a00">${r.wait.toFixed(0)}초 뒤 가능</span>`:''}<br>📍 ${esc(r.how)}<br><span class="muted">${esc(r.why.join(' · '))}</span>`;
+      tx.innerHTML = `<b>${i+1}. ${esc(CARDS[r.id].name)}</b> <span class="chip" style="background:#2775e0">${esc(r.when)}</span>${r.inHand===false?' <span class="chip" style="background:#d33030">손에 없음</span>':''}${r.wait>0.3?` <span class="chip" style="background:#c47a00">${r.wait.toFixed(0)}초 뒤 가능</span>`:''}<br>${esc(r.how)}<br><span class="muted">${esc(r.why.join(' · '))}</span>`;
       row.appendChild(tx); rb.appendChild(row);
     });
   }
 
-  // 3D 상태
-  const oppUnits = [], paths = [];
+  // 3D 상태: 위치 + 속도(전술판이 프레임마다 부드럽게 이어서 그림), 화면에서 실제로 추적 중이면 live
+  const oppUnits = [], paths = [], nowMs = performance.now();
   S.plays.filter(p=>!p.corr && !p.ability && CARDS[p.id] && t - p.t < (CARDS[p.id].type==='s' && !CARDS[p.id].tags.includes('win') ? 2.5 : 14)).forEach(p=>{
     const tp = threatPosition(p, t); if (!tp) return;
     if (CARDS[p.id].type==='t' && tp.arrived && t-p.t>9) return;
-    oppUnits.push({id:p.id, name:CARDS[p.id].name, x:tp.x, y:tp.y, label: rec && rec.threat===p ? `${CARDS[p.id].name}${tp.eta>0?` · ${tp.eta.toFixed(0)}초`:''}` : ''});
-    if (rec && rec.threat === p && !tp.arrived) paths.push([{x:tp.x,y:tp.y}, ...(tp.y<16 && !CARDS[p.id].air ? [{x:p.lane==='L'?3.5:14.5,y:16}] : []), {x:p.lane==='L'?3.5:14.5,y:24}]);
+    const tp2 = threatPosition(p, t + 0.5), vx = tp2 ? (tp2.x - tp.x)*2 : 0, vy = tp2 ? (tp2.y - tp.y)*2 : 0;
+    const isThreat = rec && rec.threat === p;
+    oppUnits.push({id:p.id, name:CARDS[p.id].name, x:tp.x, y:tp.y, vx, vy, at:nowMs, live: !!(p.live && t - p.live.t < 0.8), eta: isThreat && !tp.arrived ? tp.eta : null, born: t - p.t, cost: t - p.t < 1.4 ? playCost(S.plays, S.plays.indexOf(p), S.settings.unknownCost) : null,
+      label: isThreat ? `${CARDS[p.id].name}${tp.eta>0.5?` · ${tp.eta.toFixed(0)}초`:''}` : ''});
+    if (isThreat && !tp.arrived) paths.push([{x:tp.x,y:tp.y}, ...(tp.y<16 && !CARDS[p.id].air ? [{x:p.lane==='L'?3.5:14.5,y:16}] : []), {x:p.lane==='L'?3.5:14.5,y:24}]);
   });
-  const mineUnits = S.mine.filter(p=>!p.corr && CARDS[p.id] && t - p.t < 8 && p.x!=null).map(p=>({id:p.id, name:CARDS[p.id].name, x:p.x, y:p.y}));
+  S.plays.filter(p=>p.id==='unknown' && !p.corr && t - p.t < 1.5 && p.x != null).forEach(p=>oppUnits.push({id:'unknown', name: p.guess && CARDS[p.guess] ? CARDS[p.guess].name+'?' : '?', x:p.x, y:p.y, at:nowMs, born:t-p.t, cost: p.cost, live:false}));
+  const mineUnits = S.mine.filter(p=>!p.corr && CARDS[p.id] && t - p.t < 8 && p.x!=null).map(p=>({id:p.id, name:CARDS[p.id].name, x:p.x, y:p.y, at:nowMs, born:t-p.t, cost: t - p.t < 1.4 ? (CARDS[p.id].cost) : null}));
   const recs = rec ? rec.recs.slice(0,1).map(r=>({id:r.id, name:CARDS[r.id].name, x:r.x, y:r.y, label:`여기에 ${CARDS[r.id].name}`})) : [];
   arena.set({opp:oppUnits, mine:mineUnits, recs, paths, hint: rec && rec.recs.length ? `${rec.mode==='defend'?'수비':rec.mode==='attack'?'공격':'사이클'}: ${CARDS[rec.recs[0].id].name} · ${rec.recs[0].when}` : ''});
   if (S.placeArm && performance.now() > S.placeArm.until){ S.placeArm=null; $('arenaHint').textContent=''; }
@@ -355,7 +397,7 @@ function render(){
   inf.predicted.forEach(p=>{ const w=document.createElement('div'); w.className='slot'; w.appendChild(cardEl(p.id,{mini:true, ghost:true})); const s=document.createElement('span'); s.className='st pred'; s.textContent=`예상 ${Math.round(p.prob*100)}%`; w.appendChild(s); sl.appendChild(w); });
   for (let i=deck.known.length+inf.predicted.length;i<8;i++){ const w=document.createElement('div'); w.className='slot'; const e=document.createElement('div'); e.className='crd mini empty'; e.innerHTML='<div class="in"><div class="ic">❔</div></div>'; w.appendChild(e); sl.appendChild(w); }
   const hn = deck.hand.map(id=>CARDS[id].name), unk = deck.seq.length>=4 ? 4-hn.length : null;
-  $('handLine').textContent = deck.seq.length<4 ? '상대가 4장 이상 내면 손패를 계산해요.' : `🖐 상대 손패: ${hn.join(', ')||'—'}${unk>0?` + 모르는 ${unk}장`:''}` + (deck.next?` · 다음 복귀: ${CARDS[deck.next]?CARDS[deck.next].name:'?'}`:'');
+  $('handLine').textContent = deck.seq.length<4 ? '상대가 4장 이상 내면 손패를 계산해요.' : `상대 손패: ${hn.join(', ')||'—'}${unk>0?` + 모르는 ${unk}장`:''}` + (deck.next?` · 다음 복귀: ${CARDS[deck.next]?CARDS[deck.next].name:'?'}`:'');
 
   // 덱 추정
   const gk = inf.groups.slice(0,5).map(g=>g.n+Math.round(g.prob*100)).join('|') + (md?S.settings.myDeck:'');
@@ -385,7 +427,7 @@ function render(){
     d.appendChild(x); lg.appendChild(d);
   });
   if (!all.length) lg.innerHTML='<div class="muted">아직 기록이 없어요.</div>';
-  $('tplCount').textContent = `학습 ${templates.filter(t=>t.id!=='__ignore').length}장`;
+  $('tplCount').textContent = `학습 ${TPL.count()}장`;
   renderHud(sim.E, simMe.E, rec, deck);
   if (OVL) renderOverlay(sim, simMe, rec, deck, inf, tips);
 }
@@ -396,7 +438,7 @@ let pipWin = null;
 function renderHud(E, myE, rec, deck){
   const r = rec && rec.recs[0];
   hud.innerHTML = `<div class="hrow"><div class="hb opp"><small>상대</small><b>${E.toFixed(1)}</b></div><div class="hb me"><small>나</small><b>${myE.toFixed(1)}</b></div><div class="hb tm"><small>${S.started?phaseAt(gameTime(),S.settings.triple).label:'대기'}</small><b>${$('timer').textContent}</b></div></div>`
-    + `<div class="hrec">${r ? `${rec.mode==='defend'?'🛡':rec.mode==='attack'?'⚔️':'♻️'} <b>${esc(CARDS[r.id].name)}</b> · ${esc(r.when)}<br><small>${esc(r.how)}</small>` : esc(rec?rec.headline:'경기 시작 대기')}</div>`
+    + `<div class="hrec">${r ? `<b>${esc(CARDS[r.id].name)}</b> · ${esc(r.when)}<br><small>${esc(r.how)}</small>` : esc(rec?rec.headline:'경기 시작 대기')}</div>`
     + (deck.seq.length>=4 ? `<div class="hhand">상대 손패: ${esc(deck.hand.map(id=>CARDS[id].name).join(', '))}</div>` : '');
 }
 $('btnPip').onclick = async ()=>{
@@ -509,152 +551,407 @@ async function loadNews(force){
 }
 $('btnNews').onclick = ()=>loadNews(true);
 
-/* ---------- 학습 템플릿 ---------- */
-let templates = [];
-(store.get('crc_templates', [])).forEach(t=>{ try{ templates.push({id:t.id, raw:t.raw, f:featureFromRGBA(b64ToRGBA(t.raw))}); }catch(e){} });
-const saveTemplates = ()=> store.set('crc_templates', templates.map(t=>({id:t.id, raw:t.raw})));
-$('btnClearTpl').onclick = ()=>{ if (confirm('학습한 카드 이미지를 모두 지울까요?')){ templates=[]; saveTemplates(); renderPending(); render(); toast('지웠어요'); } };
-function learnTpl(id, raw, feat){
-  templates.push({id, raw, f:feat||featureFromRGBA(b64ToRGBA(raw))});
-  const same=templates.filter(t=>t.id===id), cap=id==='__ignore'?40:10;
-  if (same.length>cap) templates.splice(templates.indexOf(same[0]),1);
-  saveTemplates();
+/* ---------- 학습 템플릿 (모든 화면이 함께 씀) ---------- */
+const TPL = VISION.TemplateStore();
+function legacyTpl(raw){
+  try{ const a = b64ToRGBA(raw), rgb = new Uint8Array(24*24*3); for (let i=0;i<576;i++){ rgb[i*3]=a[i*4]; rgb[i*3+1]=a[i*4+1]; rgb[i*3+2]=a[i*4+2]; }
+    const up = VISION.upscale24(rgb); return {f:VISION.featurize(up,null,false), ff:VISION.featurize(up,null,true)}; }catch(e){ return null; }
+}
+function loadTemplates(){ TPL.load(store.get('crc_templates', []), legacyTpl); }
+loadTemplates();
+const saveTemplates = ()=> store.set('crc_templates', TPL.serialize());
+function learnFeats(id, feats, group){ if (!feats || !feats.length || !id) return; for (const f of feats) TPL.add(id, f.f, f.ff, group); saveTemplates(); }
+$('btnClearTpl').onclick = ()=>{ if (confirm('학습한 카드 인식 데이터를 모두 지울까요?')){ TPL.clear(); saveTemplates(); renderPending(); render(); toast('지웠어요'); } };
+
+const thumbCv = document.createElement('canvas'); thumbCv.width = thumbCv.height = 32; const thumbCx = thumbCv.getContext('2d');
+function rgbThumb(rgb){
+  if (!rgb) return '';
+  const im = thumbCx.createImageData(32, 32);
+  for (let i=0;i<1024;i++){ im.data[i*4]=rgb[i*3]; im.data[i*4+1]=rgb[i*3+1]; im.data[i*4+2]=rgb[i*3+2]; im.data[i*4+3]=255; }
+  thumbCx.putImageData(im, 0, 0); return thumbCv.toDataURL('image/jpeg', 0.85);
+}
+/* 영상/캔버스의 일부를 w x h로 줄여 RGBA로. 크게 줄일 때는 2배 크기를 한 번 거쳐 계단 잡음을 줄임 */
+function makeGrabber(getSrc){
+  const cv = document.createElement('canvas'), cx = cv.getContext('2d', {willReadFrequently:true});
+  const mid = document.createElement('canvas'), mx = mid.getContext('2d');
+  return (r, w, h)=>{
+    const v = getSrc(); if (!v || !r) return null;
+    const vw = v.videoWidth || v.width, vh = v.videoHeight || v.height; if (!vw || !vh) return null;
+    const sx = r.x*vw, sy = r.y*vh, sw = r.w*vw, sh = r.h*vh;
+    if (cv.width !== w || cv.height !== h){ cv.width = w; cv.height = h; }
+    if (sw > w*3 || sh > h*3){ const w2 = w*2, h2 = h*2; if (mid.width !== w2 || mid.height !== h2){ mid.width = w2; mid.height = h2; } mx.drawImage(v, sx, sy, sw, sh, 0, 0, w2, h2); cx.drawImage(mid, 0, 0, w, h); }
+    else cx.drawImage(v, sx, sy, sw, sh, 0, 0, w, h);
+    return cx.getImageData(0, 0, w, h).data;
+  };
 }
 
-/* ---------- 공용 감지기 ---------- */
-function Detector(cfg){
-  const ac=document.createElement('canvas'); ac.width=AW; ac.height=AH; const actx=ac.getContext('2d',{willReadFrequently:true});
-  const fc=document.createElement('canvas'); fc.width=FS; fc.height=FS; const fctx=fc.getContext('2d',{willReadFrequently:true});
-  const tc=document.createElement('canvas'); tc.width=64; tc.height=64; const tctx=tc.getContext('2d');
-  const st = {top:{prev:null,hist:[],recent:[]}, bottom:{prev:null,hist:[],recent:[]}};
-  const flashes = []; let lastFrame = -1;
-  function tick(){
-    const v = cfg.video(), cal = cfg.calib(); if (!v || !cal || !cfg.active()) return;
-    const vw=v.videoWidth||v.width, vh=v.videoHeight||v.height; if (!vw) return;
-    if (v.frameId !== undefined){ if (v.frameId === lastFrame) return; lastFrame = v.frameId; }
-    for (const side of cfg.sides()){
-      const s = st[side], bottom = side==='bottom';
-      const sy = (cal.y + (bottom ? cal.h*(17/32) : 0))*vh;
-      actx.drawImage(v, cal.x*vw, sy, cal.w*vw, cal.h*vh*RIVER, 0,0,AW,AH);
-      const d=actx.getImageData(0,0,AW,AH).data, L=new Float32Array(AW*AH);
-      for (let i=0;i<L.length;i++) L[i]=0.299*d[i*4]+0.587*d[i*4+1]+0.114*d[i*4+2];
-      if (s.prev){
-        const act=new Float32Array(GC*GR);
-        for (let y=0;y<AH;y++) for (let x=0;x<AW;x++){ const i=y*AW+x; act[((y/CP)|0)*GC+((x/CP)|0)] += Math.abs(L[i]-s.prev[i]); }
-        for (let i=0;i<act.length;i++) act[i]/=CP*CP;
-        s.hist.push(act); if (s.hist.length>6) s.hist.shift();
-        const now=performance.now(); s.recent=s.recent.filter(e=>now-e.at<1600);
-        for (const ev of detectEvents(s.hist, cfg.sens(), bottom)){
-          if (s.recent.some(r=>Math.hypot(r.cx-ev.cx,r.cy-ev.cy)<3.5) || s.recent.some(r=>now-r.at<300)) continue;
-          ev.at=now; ev.t=cfg.time(); ev.side=side; s.recent.push(ev); setTimeout(()=>capture(ev),380);
-        }
-      }
-      s.prev=L;
-    }
-  }
-  function capture(ev){
-    const v=cfg.video(), cal=cfg.calib(); if (!v||!cal) return;
-    const vw=v.videoWidth||v.width, vh=v.videoHeight||v.height, tileW=cal.w*vw/GC, tileH=cal.h*vh/32;
-    const ay = ev.side==='bottom' ? 17 + ev.cy + 0.5 : ev.cy + 0.5, ax = ev.cx + 0.5;
-    const cx=cal.x*vw+ax*tileW, cy=cal.y*vh+ay*tileH, size=Math.max(tileW,tileH)*4;
-    const sx=Math.max(0,cx-size/2), sy=Math.max(0,cy-size/2);
-    fctx.drawImage(v,sx,sy,size,size,0,0,FS,FS);
-    const rgba=fctx.getImageData(0,0,FS,FS).data, feat=featureFromRGBA(rgba), raw=rgbToB64(rgbaToRGB(rgba));
-    tctx.drawImage(v,sx,sy,size,size,0,0,64,64); const thumb=tc.toDataURL('image/jpeg',0.7);
-    const cands=matchTemplates(feat,templates);
-    flashes.push({x:ax, y:ay, at:performance.now()});
-    cfg.onEvent({t:ev.t, side:ev.side, x:ax, y:ay, thumb, raw, feat, cands});
-  }
-  setInterval(tick, 100);
-  return {flashes, tick};
+/* ---------- 손패 카드 기준 그림 ---------- */
+const HANDREF = {list:[], done:new Set()};
+function cardImgUrl(key){ return (localCards && S.settings.imgTpl === IMG_DEFAULT) ? 'cards/'+key+'.png' : S.settings.imgTpl.replace('{key}', key); }
+function handRefFrom(id, img, evo){
+  const c = document.createElement('canvas'); c.width = 60; c.height = 72; const x = c.getContext('2d', {willReadFrequently:true});
+  x.drawImage(img, 0, 0, 60, 72); let d; try{ d = x.getImageData(0, 0, 60, 72).data; }catch(e){ return null; }
+  const C = CARDS[id];
+  return {id, evo, cost: C.tags.includes('mirror') ? null : C.cost, f: VISION.handFeat(d,60,0,0,60,72,false), fg: VISION.handFeat(d,60,0,0,60,72,true)};
 }
-function CalibPreview(canvas, getVideo, getCal, setCal, detector, boxEl){
-  const ctx = canvas.getContext('2d'); let mode=false, drag=null;
-  const toN = e=>{ const r=canvas.getBoundingClientRect(); return {x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)), y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))}; };
-  canvas.addEventListener('pointerdown', e=>{ if (!mode) return; drag={a:toN(e), b:toN(e)}; canvas.setPointerCapture(e.pointerId); });
-  canvas.addEventListener('pointermove', e=>{ if (drag) drag.b=toN(e); });
-  canvas.addEventListener('pointerup', ()=>{ if (!drag) return; const x=Math.min(drag.a.x,drag.b.x), y=Math.min(drag.a.y,drag.b.y), w=Math.abs(drag.a.x-drag.b.x), h=Math.abs(drag.a.y-drag.b.y); drag=null;
-    if (w<0.05||h<0.05){ toast('영역이 너무 작아요'); return; } setCal({x,y,w,h}); mode=false; toast('경기장 영역 저장 완료'); });
-  function draw(){
-    const v=getVideo();
-    if (v && v.videoWidth){
-      const vw=v.videoWidth, vh=v.videoHeight, maxW=boxEl.clientWidth||320, maxH=520, sc=Math.min(maxW/vw, maxH/vh), cw=Math.round(vw*sc), ch=Math.round(vh*sc);
-      if (canvas.width!==cw||canvas.height!==ch){ canvas.width=cw; canvas.height=ch; }
-      ctx.drawImage(v,0,0,cw,ch);
-      const rc = drag ? {x:Math.min(drag.a.x,drag.b.x), y:Math.min(drag.a.y,drag.b.y), w:Math.abs(drag.a.x-drag.b.x), h:Math.abs(drag.a.y-drag.b.y)} : getCal();
-      if (rc){
-        ctx.strokeStyle='#ffe36b'; ctx.lineWidth=2; ctx.strokeRect(rc.x*cw, rc.y*ch, rc.w*cw, rc.h*ch);
-        const ry=(rc.y+rc.h*RIVER)*ch, ry2=(rc.y+rc.h*17/32)*ch;
-        ctx.setLineDash([6,4]); ctx.strokeStyle='#ff8af1'; ctx.beginPath(); ctx.moveTo(rc.x*cw,ry); ctx.lineTo((rc.x+rc.w)*cw,ry); ctx.moveTo(rc.x*cw,ry2); ctx.lineTo((rc.x+rc.w)*cw,ry2); ctx.stroke(); ctx.setLineDash([]);
-        const now=performance.now();
-        if (detector) for (const f of detector.flashes.filter(f=>now-f.at<1200)){ ctx.strokeStyle=f.y<16?'#ff6b6b':'#6cc3ff'; ctx.lineWidth=3; ctx.beginPath(); ctx.arc((rc.x+f.x/18*rc.w)*cw, (rc.y+f.y/32*rc.h)*ch, Math.max(10,cw*0.05), 0, Math.PI*2); ctx.stroke(); }
-      }
-    }
-    requestAnimationFrame(draw);
-  }
-  requestAnimationFrame(draw);
-  return {toggle(){ mode=!mode; if (mode) toast('상대 킹 타워 위 끝 ~ 내 킹 타워 아래 끝을 드래그하세요'); return mode; }, get on(){ return mode; }};
+function loadHandRefs(ids){
+  ids.forEach(id=>{
+    const C = CARDS[id]; if (!C || !C.key || HANDREF.done.has(id)) return; HANDREF.done.add(id);
+    [[C.key,false],[C.key+'-ev1',true]].forEach(([k,evo])=>{
+      const im = new Image(); im.crossOrigin = 'anonymous';
+      im.onload = ()=>{ const r = handRefFrom(id, im, evo); if (r){ HANDREF.list.push(r); VIS.forEach(v=>v.setHandRefs(HANDREF.list)); } };
+      im.src = cardImgUrl(k);
+    });
+  });
+}
+const handPool = ()=>{ const md = myDeck(); return md ? md.c : null; };
+function refreshHandPool(){
+  const pool = handPool();
+  loadHandRefs(pool || []);
+  if (!pool) setTimeout(()=>loadHandRefs(Object.keys(CARDS).filter(k=>k!=='unknown' && !k.endsWith('_air'))), 1500);
+  VIS.forEach(v=>v.setHandPool(pool));
 }
 
-/* ---------- 배틀 화면 캡처 ---------- */
-const video=document.createElement('video'); video.muted=true; video.playsInline=true;
-let stream=null;
+/* ---------- 인식 엔진 연결 ---------- */
+const VIS = [], VISMAP = {};
+const LIVE = {barAt:0, barSeen:0, firstV:null, regen:[], shift2:false, shift3:false, myOn:0};
+function newVision(name, grab, extra){
+  const v = VISION.Vision(Object.assign({grab, templates:TPL, sens:()=>S.settings.sens,
+    onEvent:e=>onVisionEvent(e, name), onElixir:e=>onElixir(e, name), onHand:h=>onHand(h, name)}, extra||{}));
+  v.setHandRefs(HANDREF.list); v.setHandPool(handPool());
+  VIS.push(v); VISMAP[name] = v; return v;
+}
+const visionOK = ()=> S.settings.auto;
+let playRef = 0;
+const nextRef = p=> (p||'v') + (++playRef) + '_' + Date.now().toString(36);
+// 화면 인식 결과로 상대 카드 판정 (외형 + 덱·사이클·엘릭서 문맥)
+function judgeOpp(ev, exclude){
+  const plays = S.plays.filter(p=>p !== exclude && p.t <= ev.t + 0.01);
+  const deck = analyzeDeck(plays), inf = inferDecks(deck.known);
+  const hi = simulate(plays, ev.t, opts()).hi;
+  const R = identify(ev.cands, contextPrior(plays, inf, hi), {learned: TPL.ids(), calib: TPL.calib()});
+  const th = Math.max(0.5, S.settings.thresh/100);
+  const best = R.best;
+  const noise = best && best.id === '__ignore' && best.p >= 0.7;
+  const top = R.list[0] || null;
+  const ok = !noise && top && top.p >= th && (top.tpl || top.p >= 0.9);
+  return {R, ok, noise, top};
+}
+function applyOppJudge(p, J){
+  p.post = J.R.list.slice(0, 4).map(x=>({id:x.id, p:x.p}));
+  if (J.ok){ p.id = J.top.id; p.score = J.top.p; delete p.cost; delete p.costLo; delete p.costHi; delete p.guess; }
+  else {
+    p.id = 'unknown'; p.score = J.top ? J.top.p : 0; p.guess = J.top ? J.top.id : null;
+    const c = costFromPosterior(J.R.list); if (c){ p.cost = c.c; p.costLo = c.lo; p.costHi = c.hi; }
+  }
+}
+function myEventsForSide(t){
+  return S.mine.filter(m=>!m.corr && !m.ability && Math.abs(m.t - t) < 4).map(m=>({t:m.t, id: m.id !== 'unknown' ? m.id : null, claimed: !!m.vid, _p:m}));
+}
+const myTrackingOn = ()=> performance.now() - LIVE.barAt < 3000;
+function onVisionEvent(ev, src){
+  if (ev.type === 'deploy' || ev.type === 'refine') return onDeploy(ev, src);
+  if (!S.started) return;
+  if (ev.type === 'myplay') return onMyPlay(ev);
+  if (ev.type === 'drop') return onMyDrop(ev);
+  if (ev.type === 'dropUndo'){ const i = S.mine.findIndex(m=>m.ref === ev.ref && !m.fromHand); if (i >= 0){ S.mine.splice(i, 1); render(); } }
+}
+function findByVid(vid, src){
+  for (const arr of [S.plays, S.mine]){ const p = arr.find(x=>x.vid === vid && x.vsrc === src); if (p) return {arr, p}; }
+  return null;
+}
+function onDeploy(ev, src){
+  if (!S.started || src === 'video') return src === 'video' ? onVideoEvent(ev) : undefined;
+  if (!visionOK()) return;
+  const last = ev.stage === 2;
+  const thumb = ev.stage === 0 || !findByVid(ev.vid, src) ? rgbThumb(ev.rgb) : null;
+  let cur = findByVid(ev.vid, src);
+  // 진영: 화면 + 내가 실제로 낸 카드로 확정 (내 엘릭서 바를 읽고 있을 때)
+  let side = ev.side, mineRef = null;
+  if (myTrackingOn()){
+    const r = resolveSide(ev, myEventsForSide(ev.t).filter(m=>!(cur && m._p === cur.p)));
+    side = r.side; if (r.mine) mineRef = r.mine._p;
+  } else if (ev.side === 'bottom' && !S.settings.autoMine) side = 'none';
+  if (side === 'none'){ if (cur){ cur.arr.splice(cur.arr.indexOf(cur.p), 1); render(); } return; }
+  if (side === 'bottom'){
+    // 내 카드: 위치·썸네일만 붙임 (카드 이름은 손패/엘릭서로 이미 앎)
+    if (cur && cur.arr === S.plays){ S.plays.splice(S.plays.indexOf(cur.p), 1); cur = null; }
+    const m = cur ? cur.p : (mineRef || S.mine.slice().reverse().find(x=>!x.vid && !x.corr && Math.abs(ev.t - x.t) < 1.2));
+    if (m){ m.vid = ev.vid; m.vsrc = src; m.x = ev.x; m.y = ev.y; m.lane = laneOf(ev.x); if (thumb) m.thumb = thumb; }
+    else if (!myTrackingOn() && S.settings.autoMine){
+      const J = judgeMine(ev);
+      S.mine.push({t:ev.t, id:J.id, vid:ev.vid, vsrc:src, x:ev.x, y:ev.y, lane:laneOf(ev.x), auto:true, score:J.p, thumb, ref:nextRef('m')});
+    }
+    render(); return;
+  }
+  // 상대 카드
+  if (cur && cur.arr === S.mine){ delete cur.p.vid; cur = null; }
+  const p = cur ? cur.p : {t:ev.t, id:'unknown', ref:nextRef('o'), vid:ev.vid, vsrc:src, auto:true, x:ev.x, y:ev.y, lane:laneOf(ev.x), thumb, src:ev.src};
+  const before = p.id;
+  const J = judgeOpp(ev, p);
+  if (J.noise){ if (cur) S.plays.splice(S.plays.indexOf(p), 1); render(); return; }
+  applyOppJudge(p, J);
+  p.x = ev.x; p.y = ev.y; p.lane = laneOf(ev.x);
+  if (!cur) S.plays.push(p);
+  if (p.id !== 'unknown' && p.id !== before) speak('opp:'+p.id, `상대 ${CARDS[p.id].name}`);
+  if (last){
+    p.feats = ev.feats;
+    if (p.id === 'unknown') addPending({ref:p.ref, side:'top', t:ev.t, x:ev.x, y:ev.y, thumb:p.thumb, feats:ev.feats, cands:(p.post||[]).map(x=>({id:x.id, score:x.p}))});
+    // 아주 확실하면 스스로 학습 (카드당 15장까지)
+    else if (J.top.p >= 0.97 && J.top.tpl && TPL.count(p.id) < 15) learnFeats(p.id, ev.feats, 'a'+p.ref);
+  }
+  render();
+}
+function judgeMine(ev){
+  const md = myDeck(); const pool = md ? md.c : null;
+  const pri = pool ? Object.fromEntries(Object.keys(CARDS).filter(k=>k!=='unknown').map(k=>[k, pool.includes(k) ? 1 : 0.001])) : null;
+  const R = identify(ev.cands, pri, {learned:TPL.ids(), calib:TPL.calib()});
+  const top = R.list[0];
+  return top && top.p >= 0.6 ? {id:top.id, p:top.p} : {id:'unknown', p: top ? top.p : 0};
+}
+function onMyPlay(ev){
+  LIVE.myOn = performance.now();
+  let m = S.mine.find(x=>(ev.ref && x.ref === ev.ref) || (!x.fromHand && !x.corr && Math.abs(x.t - ev.t) < 0.45));
+  if (m){ m.id = ev.id; m.fromHand = true; m.score = ev.conf; delete m.guess; delete m.cost; if (ev.ref) m.ref = ev.ref; }
+  else { m = {t:ev.t, id:ev.id, auto:true, fromHand:true, score:ev.conf, ref: ev.ref || nextRef('h')}; S.mine.push(m); }
+  render();
+}
+function onMyDrop(ev){
+  LIVE.myOn = performance.now();
+  if (S.mine.some(x=>x.ref === ev.ref || (x.fromHand && Math.abs(x.t - ev.t) < 0.45))) return;
+  const g = myCardForCost(ev.cost);
+  const p = {t:ev.t, id:g.id, ref:ev.ref, auto:true, score:g.guess?0.5:0.9, fromElixir:true};
+  if (g.id === 'unknown') p.cost = ev.cost; if (g.guess) p.guess = g.alts;
+  S.mine.push(p); render();
+}
+function onHand(h){
+  S.handLive = h.slots.filter(Boolean).length >= 3 ? {slots:h.slots, next:h.next, at:performance.now()} : S.handLive;
+  // 내 덱을 고르지 않았으면 손패에서 본 카드로 덱을 자동으로 모음
+  if (!myDeck()) h.slots.forEach(id=>{ if (id && !S.autoDeck.includes(id) && S.autoDeck.length < 8) S.autoDeck.push(id); });
+}
+S.autoDeck = [];
+/* 엘릭서 바: 내 엘릭서(정확한 값) + 경기 자동 시작·끝 + 2배/3배 시점 맞추기 */
+function onElixir(e){
+  const now = performance.now();
+  if (e.present){
+    LIVE.barAt = now; LIVE.barSeen++;
+    S.myLive = {v:e.value, at:now};
+    const autoOn = OVL || S.settings.autoStart;
+    if (!S.started && autoOn){
+      // 카운트다운 중엔 5에서 멈춰 있음 → 실제로 차오르기 시작할 때 시작 (엘릭서 5 = 0초)
+      if (LIVE.firstV == null) LIVE.firstV = e.value;
+      if (LIVE.barSeen >= 3 && (e.value - LIVE.firstV > 0.12 || e.value > 5.6)){
+        startGame(); S.offset = Math.max(0, Math.min(20, (e.value - 5)*2.8));
+        LIVE.regen = []; LIVE.shift2 = LIVE.shift3 = false; LIVE.firstV = null;
+        S.autoStarted = true;
+      }
+    }
+    if (S.started) regenSync(e.value, now);
+  } else {
+    LIVE.barSeen = 0; LIVE.firstV = null;
+    if (S.started && S.autoStarted && LIVE.barAt && now - LIVE.barAt > 6000){ endGame(); S.autoStarted = false; LIVE.barAt = 0; if (OVL) ovFinishMatch(); }
+  }
+}
+// 내 엘릭서가 차오르는 속도로 2배·3배 구간 시작을 자동으로 맞춤
+//  - 2.5초 이상, 15개 이상의 값으로 선형 회귀 기울기를 구하고, 두 번 연속 같은 결론일 때만 옮김
+function regenSync(v, now){
+  const hs = LIVE.regen;
+  if (v < 9.7 && (!hs.length || v >= hs[hs.length-1].v - 0.15)) hs.push({t:now, v}); else { LIVE.regen = []; LIVE.vote = 0; return; }
+  while (hs.length && now - hs[0].t > 4000) hs.shift();
+  if (hs.length < 15 || now - hs[0].t < 2500) return;
+  let mt = 0, mv = 0; for (const h of hs){ mt += h.t; mv += h.v; } mt /= hs.length; mv /= hs.length;
+  let num = 0, den = 0; for (const h of hs){ num += (h.t-mt)*(h.v-mv); den += (h.t-mt)*(h.t-mt); }
+  const rate = den ? num/den*1000 : 0, gt = gameTime();
+  const want2 = !LIVE.shift2 && rate > 0.6 && rate < 0.9 && gt < 116;
+  const want3 = !LIVE.shift3 && rate > 0.95 && gt > 150 && gt < 236 && S.settings.triple;
+  LIVE.vote = (want2 || want3) ? (LIVE.vote||0) + 1 : 0;
+  if (LIVE.vote >= 2){
+    if (want2){ S.offset += 120 - gt; LIVE.shift2 = true; }
+    else if (want3){ S.offset += 240 - gt; LIVE.shift3 = true; }
+    LIVE.vote = 0; LIVE.regen = [];
+  }
+  LIVE.rate = rate;
+}
+function myCardForCost(cost){
+  const md = myDeck(), deckIds = md ? md.c : (S.autoDeck.length ? S.autoDeck : null);
+  if (!deckIds) return {id:'unknown', guess:false};
+  const live = S.handLive && performance.now() - S.handLive.at < 2000 ? S.handLive.slots.filter(Boolean) : null;
+  const hand = live && live.length ? live : (md ? myHandOf(md.c, S.mine).hand : deckIds);
+  const pool = hand.filter(id=>CARDS[id] && !CARDS[id].tags.includes('mirror') && CARDS[id].cost === cost);
+  if (pool.length === 1) return {id:pool[0], guess:false};
+  if (pool.length > 1) return {id:pool[0], guess:true, alts:pool};
+  const any = deckIds.filter(id=>CARDS[id] && CARDS[id].cost === cost);
+  return any.length ? {id:any[0], guess:true, alts:any} : {id:'unknown', guess:false};
+}
+// 전술판: 화면에서 따라가고 있는 실제 위치
+function syncLivePositions(){
+  const now = performance.now(), gt = gameTime();
+  for (const p of S.plays){
+    if (!p.vid || !VISMAP[p.vsrc]) continue;
+    const lt = VISMAP[p.vsrc].liveTrack(p.vid, now);
+    if (lt) p.live = {x:lt.x, y:lt.y, t: gt - (now - lt.at)/1000};
+  }
+}
+
+/* ---------- 영역 맞추기 (경기장 · 엘릭서 바 · 내 카드 4장 · 다음 카드) ---------- */
+const CAL_STEPS = [
+  {key:'arena', label:'경기장', msg:'상대 킹 타워 위 끝부터 내 킹 타워 아래 끝까지 드래그하세요. 분홍 점선 두 줄이 강의 위·아래에 오면 정확해요.', color:'#ffd84d', minH:0.2},
+  {key:'bar', label:'엘릭서 바', msg:'화면 맨 아래 분홍색 엘릭서 바(숫자 오른쪽 막대)만 감싸세요. 눈금 10칸이 바의 칸과 맞으면 정확해요.', color:'#ff7bd5', minH:0.005},
+  {key:'hand', label:'내 카드 4장', msg:'아래쪽 내 카드 4장을 한 번에 감싸세요. 세로선 3개가 카드 사이 틈에 오면 정확해요.', color:'#6fd3ff', minH:0.03},
+  {key:'next', label:'다음 카드', msg:'왼쪽 아래 작은 \'다음\' 카드만 감싸세요. 없으면 [건너뛰기].', color:'#8dff7a', minH:0.02, optional:true},
+];
+const CAL_DEFAULT = {arena:{x:0.02, y:0.075, w:0.96, h:0.70}, bar:{x:0.27, y:0.948, w:0.70, h:0.022}};
+function calDefault(key, rects){
+  if (CAL_DEFAULT[key]) return Object.assign({}, CAL_DEFAULT[key]);
+  const b = (rects && rects.bar) || CAL_DEFAULT.bar;
+  if (key === 'hand') return {x:Math.max(0, b.x - 0.02), y:Math.max(0, b.y - 0.118), w:Math.min(1 - b.x + 0.02, b.w + 0.03), h:0.10};
+  if (key === 'next') return {x:0.035, y:Math.max(0, b.y - 0.085), w:0.13, h:0.075};
+  return null;
+}
+function drawCalGuides(ctx, key, rc, W, H, active){
+  const x = rc.x*W, y = rc.y*H, w = rc.w*W, h = rc.h*H, st = CAL_STEPS.find(s=>s.key===key);
+  ctx.save();
+  if (!active){ ctx.setLineDash([5,4]); ctx.strokeStyle = 'rgba(255,255,255,.45)'; ctx.lineWidth = 1.5; ctx.strokeRect(x, y, w, h); ctx.restore(); return; }
+  ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(0, 0, W, y); ctx.fillRect(0, y+h, W, H-y-h); ctx.fillRect(0, y, x, h); ctx.fillRect(x+w, y, W-x-w, h);
+  ctx.strokeStyle = st.color; ctx.lineWidth = 2.5; ctx.strokeRect(x, y, w, h);
+  ctx.setLineDash([6,4]); ctx.lineWidth = 1.5;
+  if (key === 'arena'){
+    ctx.strokeStyle = '#ff8af1'; [15/32, 17/32].forEach(f=>{ ctx.beginPath(); ctx.moveTo(x, y+h*f); ctx.lineTo(x+w, y+h*f); ctx.stroke(); });
+    ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.beginPath(); ctx.moveTo(x+w/2, y); ctx.lineTo(x+w/2, y+h); ctx.stroke();
+  } else if (key === 'bar'){
+    ctx.setLineDash([]); ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 1;
+    for (let i=1;i<10;i++){ ctx.beginPath(); ctx.moveTo(x+w*i/10, y); ctx.lineTo(x+w*i/10, y+h); ctx.stroke(); }
+  } else if (key === 'hand'){
+    ctx.strokeStyle = st.color; for (let i=1;i<4;i++){ ctx.beginPath(); ctx.moveTo(x+w*i/4, y); ctx.lineTo(x+w*i/4, y+h); ctx.stroke(); }
+  }
+  ctx.restore();
+}
+/* 단계별 영역 맞추기: canvas 위에서 드래그. ui = {msg, title, prev, next, reset, cancel} 요소 */
+function CalibFlow(o){
+  let on = false, step = 0, tmp = null, drag = null;
+  const ui = o.ui, CAL_STEPS_ = o.steps || CAL_STEPS;
+  const toN = e=>{ const r = o.canvas.getBoundingClientRect(); return {x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)), y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))}; };
+  o.canvas.addEventListener('pointerdown', e=>{ if (!on) return; drag = {a:toN(e), b:toN(e)}; o.canvas.setPointerCapture(e.pointerId); e.preventDefault(); });
+  o.canvas.addEventListener('pointermove', e=>{ if (drag) drag.b = toN(e); });
+  o.canvas.addEventListener('pointerup', ()=>{ if (!drag) return; const rc = {x:Math.min(drag.a.x,drag.b.x), y:Math.min(drag.a.y,drag.b.y), w:Math.abs(drag.a.x-drag.b.x), h:Math.abs(drag.a.y-drag.b.y)}; drag = null;
+    const st = CAL_STEPS_[step]; if (rc.w > 0.04 && rc.h > st.minH) tmp[st.key] = rc; else toast('영역이 너무 작아요'); });
+  function sync(){
+    const st = CAL_STEPS_[step];
+    ui.title.textContent = `${step+1}/${CAL_STEPS_.length} ${st.label}`; ui.msg.textContent = st.msg;
+    ui.prev.style.visibility = step ? 'visible' : 'hidden';
+    ui.next.textContent = step === CAL_STEPS_.length-1 ? '완료' : (st.optional && !tmp[st.key] ? '건너뛰기' : '다음');
+  }
+  ui.prev.onclick = ()=>{ if (step > 0){ step--; sync(); } };
+  ui.next.onclick = ()=>{ if (step < CAL_STEPS_.length-1){ if (!tmp[CAL_STEPS_[step].key] && !CAL_STEPS_[step].optional) tmp[CAL_STEPS_[step].key] = calDefault(CAL_STEPS_[step].key, tmp); step++; if (!tmp[CAL_STEPS_[step].key] && !CAL_STEPS_[step].optional) tmp[CAL_STEPS_[step].key] = calDefault(CAL_STEPS_[step].key, tmp); sync(); return; } on = false; o.save(tmp); o.end && o.end(true); };
+  ui.reset.onclick = ()=>{ const k = CAL_STEPS_[step].key; tmp[k] = calDefault(k, tmp); };
+  ui.cancel.onclick = ()=>{ on = false; o.end && o.end(false); };
+  return {
+    start(){ on = true; step = 0; tmp = Object.assign({}, o.rects()); if (!tmp.arena) tmp.arena = calDefault('arena'); sync(); },
+    get on(){ return on; },
+    draw(ctx, W, H){
+      if (!on) return;
+      const cur = CAL_STEPS_[step].key;
+      for (const st of CAL_STEPS_){ if (st.key === cur) continue; if (tmp[st.key]) drawCalGuides(ctx, st.key, tmp[st.key], W, H, false); }
+      const rc = drag ? {x:Math.min(drag.a.x,drag.b.x), y:Math.min(drag.a.y,drag.b.y), w:Math.abs(drag.a.x-drag.b.x), h:Math.abs(drag.a.y-drag.b.y)} : tmp[cur];
+      if (rc) drawCalGuides(ctx, cur, rc, W, H, true);
+    },
+  };
+}
+
+/* ---------- PC: 미러링 창 캡처 ---------- */
+const video = document.createElement('video'); video.muted = true; video.playsInline = true;
+let stream = null;
+S.calib2 = store.get('crc_calib2', {});
 async function getScreen(preferTab){
   if (window.crNative && window.crNative.pickSource) await window.crNative.pickSource();
   if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) throw new Error('nosupport');
   return navigator.mediaDevices.getDisplayMedia({video:{frameRate:30}, audio:false, preferCurrentTab: !!preferTab});
 }
-const det = Detector({video:()=>stream?video:null, calib:()=>S.calib, active:()=>S.settings.auto && S.started && !calib.on, sides:()=>S.settings.autoMine?['top','bottom']:['top'], sens:()=>S.settings.sens, time:gameTime, onEvent:onBattleEvent});
-const calib = CalibPreview($('preview'), ()=>stream?video:null, ()=>S.calib, c=>{ S.calib=c; store.set('crc_calib',c); }, det, $('previewBox'));
-$('btnCapture').onclick = async ()=>{
-  if (stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; capOff(); return; }
-  try{
-    stream = await getScreen(false); video.srcObject = stream; await video.play();
-    stream.getVideoTracks()[0].addEventListener('ended', ()=>{ stream=null; capOff(); });
-    $('btnCapture').textContent='연결 해제'; $('btnCapture').classList.replace('green','red'); $('previewHint').style.display='none'; $('preview').style.display='block';
-    if (!S.calib){ calib.toggle(); }
-    $('capStatus').textContent='연결됨';
-  }catch(e){ toast(e.message==='nosupport' ? '이 환경은 화면 공유를 지원하지 않아요. PC 앱이나 PC의 Chrome/Edge를 쓰세요.' : '화면 연결이 취소됐어요'); stream=null; }
-};
-function capOff(){ $('btnCapture').textContent='화면 연결'; $('btnCapture').classList.replace('red','green'); $('preview').style.display='none'; $('previewHint').style.display='block'; $('capStatus').textContent=''; }
-$('btnCalib').onclick = ()=>{ if (!stream){ toast('먼저 화면을 연결해주세요'); return; } $('btnCalib').classList.toggle('on', calib.toggle()); };
-function onBattleEvent(ev){
-  const best = ev.cands[0], th = S.settings.thresh/100;
-  if (best && best.score >= th){
-    if (best.id==='__ignore') return;
-    if (S.settings.autoAccept){
-      const extra = {auto:true, score:best.score, thumb:ev.thumb, x:ev.x, y:ev.y, lane:laneOf(ev.x)};
-      if (ev.side==='top') { S.plays.push(Object.assign({t:ev.t, id:best.id}, extra)); } else { S.mine.push(Object.assign({t:ev.t, id:best.id}, extra)); }
-      render(); return;
+const pcRects = ()=>({arena:S.calib, bar:S.calib2.bar || null, hand:S.calib2.hand || null, next:S.calib2.next || null});
+const pcVis = newVision('pc', makeGrabber(()=>stream ? video : null), {arenaActive:()=>S.started && visionOK()});
+const calBar = document.createElement('div'); calBar.className = 'calBar'; calBar.style.display = 'none';
+calBar.innerHTML = '<div class="calTop"><b class="calT"></b><span class="calM"></span></div><div class="row"><button class="btn sm calR">기본값</button><button class="btn sm calC">취소</button><span style="flex:1"></span><button class="btn sm calP">이전</button><button class="btn sm green calN">다음</button></div>';
+$('previewBox').after(calBar);
+const pcCal = CalibFlow({canvas:$('preview'), rects:pcRects,
+  ui:{title:calBar.querySelector('.calT'), msg:calBar.querySelector('.calM'), prev:calBar.querySelector('.calP'), next:calBar.querySelector('.calN'), reset:calBar.querySelector('.calR'), cancel:calBar.querySelector('.calC')},
+  save:r=>{ S.calib = r.arena; S.calib2 = {bar:r.bar, hand:r.hand, next:r.next}; store.set('crc_calib', S.calib); store.set('crc_calib2', S.calib2); toast('영역 저장 완료'); },
+  end:()=>{ calBar.style.display = 'none'; $('btnCalib').classList.remove('on'); }});
+function startPcCal(){ calBar.style.display = 'block'; $('btnCalib').classList.add('on'); pcCal.start(); }
+(function previewLoop(){
+  const cv = $('preview'), ctx = cv.getContext('2d');
+  if (stream && video.videoWidth){
+    const vw = video.videoWidth, vh = video.videoHeight, maxW = $('previewBox').clientWidth || 320, maxH = 560, sc = Math.min(maxW/vw, maxH/vh), cw = Math.round(vw*sc), ch = Math.round(vh*sc);
+    if (cv.width !== cw || cv.height !== ch){ cv.width = cw; cv.height = ch; }
+    ctx.drawImage(video, 0, 0, cw, ch);
+    if (pcCal.on) pcCal.draw(ctx, cw, ch);
+    else if (S.calib){
+      const r = S.calib, now = performance.now();
+      ctx.strokeStyle = 'rgba(255,216,77,.8)'; ctx.lineWidth = 1.5; ctx.strokeRect(r.x*cw, r.y*ch, r.w*cw, r.h*ch);
+      ['bar','hand','next'].forEach(k=>{ const q = S.calib2[k]; if (q){ ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.strokeRect(q.x*cw, q.y*ch, q.w*cw, q.h*ch); } });
+      // 감지 표시: 최근 배치 위치
+      for (const p of S.plays.concat(S.mine)){ if (!p.vid || gameTime() - p.t > 1.6) continue;
+        const a = 1 - (gameTime() - p.t)/1.6; ctx.strokeStyle = S.plays.includes(p) ? `rgba(255,90,90,${a})` : `rgba(90,170,255,${a})`; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc((r.x + p.x/18*r.w)*cw, (r.y + p.y/32*r.h)*ch, Math.max(10, cw*0.05), 0, Math.PI*2); ctx.stroke(); }
     }
   }
-  S.pending.unshift(Object.assign({}, ev, {cands:ev.cands.filter(c=>c.id!=='__ignore').slice(0,3)}));
-  if (S.pending.length>6) S.pending.length=6; renderPending();
+  requestAnimationFrame(previewLoop);
+})();
+// 프레임마다 처리 (영상 프레임 콜백이 있으면 새 프레임이 올 때만)
+function pcProcess(){
+  if (!stream || pcCal.on || !S.calib) return;
+  pcVis.setCalib(pcRects());
+  pcVis.process(gameTime(), performance.now());
+}
+if ('requestVideoFrameCallback' in HTMLVideoElement.prototype){
+  let lastAt = 0;
+  const onVF = (now)=>{ if (now - lastAt >= 66){ lastAt = now; pcProcess(); } if (stream) video.requestVideoFrameCallback(onVF); };
+  video.addEventListener('playing', ()=> video.requestVideoFrameCallback(onVF));
+} else setInterval(pcProcess, 80);
+$('btnCapture').onclick = async ()=>{
+  if (stream){ stream.getTracks().forEach(t=>t.stop()); stream = null; capOff(); return; }
+  try{
+    stream = await getScreen(false); video.srcObject = stream; await video.play();
+    stream.getVideoTracks()[0].addEventListener('ended', ()=>{ stream = null; capOff(); });
+    $('btnCapture').textContent = '연결 해제'; $('btnCapture').classList.replace('green','red'); $('previewHint').style.display = 'none'; $('preview').style.display = 'block';
+    if (!S.calib) startPcCal();
+    $('capStatus').textContent = '연결됨';
+  }catch(e){ toast(e.message === 'nosupport' ? '이 환경은 화면 공유를 지원하지 않아요. PC 앱이나 PC의 Chrome/Edge를 쓰세요.' : '화면 연결이 취소됐어요'); stream = null; }
+};
+function capOff(){ $('btnCapture').textContent = '화면 연결'; $('btnCapture').classList.replace('red','green'); $('preview').style.display = 'none'; $('previewHint').style.display = 'block'; $('capStatus').textContent = ''; calBar.style.display = 'none'; }
+$('btnCalib').onclick = ()=>{ if (!stream){ toast('먼저 화면을 연결해주세요'); return; } if (pcCal.on) calBar.querySelector('.calC').click(); else startPcCal(); };
+
+/* ---------- 확인이 필요한 장면 (경기 후 골라주면 학습) ---------- */
+function addPending(pd){
+  if (S.pending.some(x=>x.ref === pd.ref)) return;
+  S.pending.unshift(pd); if (S.pending.length > 16) S.pending.length = 16; renderPending();
 }
 function renderPending(){
-  const el=$('pending'); el.innerHTML='';
-  if (!S.pending.length){ el.innerHTML='<div class="muted">감지된 장면이 여기 나와요. 카드를 고르면 학습해서 다음부터 자동으로 기록해요.</div>'; return; }
-  const deck=analyzeDeck(S.plays), inf=inferDecks(deck.known), md=myDeck();
-  S.pending.forEach((pd,idx)=>{
-    const box=document.createElement('div'); box.className='pend'; box.innerHTML=`<img src="${pd.thumb}"><span class="chip" style="background:${pd.side==='top'?'#d33030':'#2775e0'};align-self:flex-start">${pd.side==='top'?'상대':'나'}</span>`;
-    const btns=document.createElement('div'); btns.className='btns'; const ids=[];
-    pd.cands.forEach(c=>{ if(!ids.includes(c.id)) ids.push(c.id); });
-    (pd.side==='top' ? deck.known.concat(inf.predicted.slice(0,3).map(p=>p.id)) : (md?md.c:[])).forEach(id=>{ if(!ids.includes(id)) ids.push(id); });
-    ids.slice(0,9).forEach(id=>{ const c=CARDS[id]; if(!c) return; const sc=pd.cands.find(x=>x.id===id); const b=document.createElement('button'); b.className='btn sm'; b.textContent=c.name+(sc?` ${Math.round(sc.score*100)}%`:''); b.onclick=()=>resolveP(idx,id); btns.appendChild(b); });
-    const sel=document.createElement('select'); sel.className='field'; sel.style.fontSize='12px';
-    sel.innerHTML='<option value="">다른 카드…</option>'+Object.values(CARDS).filter(c=>c.id!=='unknown').sort((a,b)=>a.name.localeCompare(b.name,'ko')).map(c=>`<option value="${c.id}">${esc(c.name)} (${c.cost})</option>`).join('');
-    sel.onchange=()=>{ if (sel.value) resolveP(idx,sel.value); }; btns.appendChild(sel);
-    const ig=document.createElement('button'); ig.className='btn sm red'; ig.textContent='카드 아님'; ig.onclick=()=>{ learnTpl('__ignore',pd.raw,pd.feat); S.pending.splice(idx,1); renderPending(); }; btns.appendChild(ig);
+  const el = $('pending'); el.innerHTML = '';
+  if (!S.pending.length){ el.innerHTML = '<div class="muted">자동으로 확신하지 못한 장면이 여기 쌓여요. 카드를 골라주면 학습해서 다음부터 바로 알아봐요.</div>'; return; }
+  const deck = analyzeDeck(S.plays), inf = inferDecks(deck.known), md = myDeck();
+  S.pending.forEach((pd, idx)=>{
+    const box = document.createElement('div'); box.className = 'pend';
+    box.innerHTML = `<img src="${pd.thumb||''}" alt=""><span class="side ${pd.side==='top'?'opp':'me'}">${pd.side==='top'?'상대':'나'}</span>`;
+    const btns = document.createElement('div'); btns.className = 'btns'; const ids = [];
+    (pd.cands||[]).forEach(c=>{ if (c.id !== '__ignore' && !ids.includes(c.id)) ids.push(c.id); });
+    (pd.side==='top' ? deck.known.concat(inf.predicted.slice(0,3).map(p=>p.id)) : (md?md.c:[])).forEach(id=>{ if (!ids.includes(id)) ids.push(id); });
+    ids.slice(0,8).forEach(id=>{ const c = CARDS[id]; if (!c) return; const sc = (pd.cands||[]).find(x=>x.id===id); const b = document.createElement('button'); b.className = 'btn sm'; b.innerHTML = esc(c.name) + (sc && sc.score >= 0.05 ? ` <small>${Math.round(sc.score*100)}%</small>` : ''); b.onclick = ()=>resolveP(idx, id); btns.appendChild(b); });
+    const sel = document.createElement('select'); sel.className = 'field sm';
+    sel.innerHTML = '<option value="">다른 카드…</option>' + Object.values(CARDS).filter(c=>c.id!=='unknown').sort((a,b)=>a.name.localeCompare(b.name,'ko')).map(c=>`<option value="${c.id}">${esc(c.name)} (${c.cost})</option>`).join('');
+    sel.onchange = ()=>{ if (sel.value) resolveP(idx, sel.value); }; btns.appendChild(sel);
+    const ig = document.createElement('button'); ig.className = 'btn sm red'; ig.textContent = '카드 아님';
+    ig.onclick = ()=>{ learnFeats('__ignore', pd.feats, 'i'+pd.ref); const arr = pd.side==='top' ? S.plays : S.mine, i = arr.findIndex(p=>p.ref===pd.ref); if (i >= 0) arr.splice(i, 1); S.pending.splice(idx, 1); renderPending(); render(); };
+    btns.appendChild(ig);
     box.appendChild(btns); el.appendChild(box);
   });
 }
-function resolveP(idx,id){
-  const pd=S.pending[idx]; if(!pd) return;
-  learnTpl(id,pd.raw,pd.feat);
-  const arr = pd.side==='top'?S.plays:S.mine, ex = pd.ref ? arr.find(p=>p.ref===pd.ref) : null;
-  if (ex){ ex.id=id; delete ex.cost; delete ex.guess; ex.thumb=ex.thumb||pd.thumb; }
-  else if (S.started){ const e={t:pd.t, id, thumb:pd.thumb, x:pd.x, y:pd.y, lane:laneOf(pd.x)}; arr.push(e); }
-  S.pending.splice(idx,1); renderPending(); render(); toast(`${CARDS[id].name} 기록 + 학습`);
+function resolveP(idx, id){
+  const pd = S.pending[idx]; if (!pd) return;
+  learnFeats(id, pd.feats, 'u'+pd.ref);
+  const arr = pd.side==='top' ? S.plays : S.mine, ex = pd.ref ? arr.find(p=>p.ref===pd.ref) : null;
+  if (ex){ ex.id = id; delete ex.cost; delete ex.costLo; delete ex.costHi; delete ex.guess; ex.score = 1; }
+  else if (S.started) arr.push({t:pd.t, id, thumb:pd.thumb, x:pd.x, y:pd.y, lane:laneOf(pd.x), ref:pd.ref});
+  S.pending.splice(idx, 1); renderPending(); render(); toast(`${CARDS[id].name} 기록 + 학습`);
 }
 
 /* ---------- 영상 학습 ---------- */
@@ -662,8 +959,34 @@ const vvideo = $('vVideo'); let vstream = null, vsrc = 'none', vAnalyze = false,
 const capVideo = document.createElement('video'); capVideo.muted=true; capVideo.playsInline=true;
 const vSource = ()=> vsrc==='file' ? vvideo : vsrc==='cap' ? capVideo : null;
 const vTime = ()=> vsrc==='file' ? vvideo.currentTime : (performance.now()/1000);
-const vdet = Detector({video:vSource, calib:()=>S.vcalib, active:()=>vAnalyze && (vsrc!=='file' || !vvideo.paused), sides:()=>['top','bottom'], sens:()=>S.settings.sens, time:vTime, onEvent:onVideoEvent});
-const vcal = CalibPreview($('vPreview'), vSource, ()=>S.vcalib, c=>{ S.vcalib=c; store.set('crc_vcalib',c); }, vdet, $('vPreviewBox'));
+const vVis = newVision('video', makeGrabber(vSource), {arenaActive:()=>vAnalyze && (vsrc!=='file' || !vvideo.paused)});
+const vCalBar = document.createElement('div'); vCalBar.className = 'calBar'; vCalBar.style.display = 'none';
+vCalBar.innerHTML = calBar.innerHTML; $('vPreviewBox').after(vCalBar);
+const vcal = CalibFlow({canvas:$('vPreview'), steps:[CAL_STEPS[0]], rects:()=>({arena:S.vcalib}),
+  ui:{title:vCalBar.querySelector('.calT'), msg:vCalBar.querySelector('.calM'), prev:vCalBar.querySelector('.calP'), next:vCalBar.querySelector('.calN'), reset:vCalBar.querySelector('.calR'), cancel:vCalBar.querySelector('.calC')},
+  save:r=>{ S.vcalib = r.arena; store.set('crc_vcalib', S.vcalib); toast('경기장 영역 저장 완료'); },
+  end:()=>{ vCalBar.style.display = 'none'; }});
+vcal.toggle = ()=>{ vCalBar.style.display = 'block'; vcal.start(); };
+let vLastMs = 0;
+setInterval(()=>{
+  const src = vSource(); if (!vAnalyze || !src || !S.vcalib || vcal.on) return;
+  const ms = vsrc === 'file' ? vvideo.currentTime*1000 : performance.now();
+  if (ms < vLastMs - 500) vVis.reset(); vLastMs = ms;
+  vVis.setCalib({arena:S.vcalib}); vVis.process(vTime(), ms);
+}, 83);
+(function vPreviewLoop(){
+  const cv = $('vPreview'), ctx = cv.getContext('2d'), v = vSource();
+  if (v && v.videoWidth){
+    const vw = v.videoWidth, vh = v.videoHeight, maxW = $('vPreviewBox').clientWidth || 320, sc = Math.min(maxW/vw, 520/vh), cw = Math.round(vw*sc), ch = Math.round(vh*sc);
+    if (cv.width !== cw || cv.height !== ch){ cv.width = cw; cv.height = ch; }
+    ctx.drawImage(v, 0, 0, cw, ch);
+    if (vcal.on) vcal.draw(ctx, cw, ch);
+    else if (S.vcalib){ const r = S.vcalib; ctx.strokeStyle = 'rgba(255,216,77,.8)'; ctx.lineWidth = 1.5; ctx.strokeRect(r.x*cw, r.y*ch, r.w*cw, r.h*ch);
+      for (const f of vFlash.filter(f=>performance.now() - f.at < 1200)){ ctx.strokeStyle = f.y < 16 ? '#ff6b6b' : '#6cc3ff'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc((r.x + f.x/18*r.w)*cw, (r.y + f.y/32*r.h)*ch, Math.max(10, cw*0.05), 0, Math.PI*2); ctx.stroke(); } }
+  }
+  requestAnimationFrame(vPreviewLoop);
+})();
+const vFlash = [];
 $('vFile').onchange = e=>{
   const f = e.target.files[0]; if (!f) return;
   vvideo.src = URL.createObjectURL(f); vvideo.style.display='block'; $('vYT').innerHTML=''; vsrc='file'; vMatch='m'+Date.now();
@@ -676,18 +999,23 @@ $('vYTBtn').onclick = ()=>{
   vvideo.style.display='none'; vMatch='yt-'+m[1]; $('vStatus').textContent='유튜브 영상을 열었어요. 분석하려면 [이 탭 화면 공유]를 누르세요.';
 };
 $('vCapBtn').onclick = async ()=>{
-  if (vstream){ vstream.getTracks().forEach(t=>t.stop()); vstream=null; vsrc='none'; $('vCapBtn').textContent='🖥 이 탭 화면 공유'; return; }
+  if (vstream){ vstream.getTracks().forEach(t=>t.stop()); vstream=null; vsrc='none'; $('vCapBtn').textContent='이 탭 화면 공유'; return; }
   try{ vstream = await getScreen(true); capVideo.srcObject=vstream; await capVideo.play(); vsrc='cap'; $('vPreview').style.display='block'; $('vCapBtn').textContent='공유 중지'; if (!S.vcalib) vcal.toggle();
-    vstream.getVideoTracks()[0].addEventListener('ended', ()=>{ vstream=null; vsrc='none'; $('vCapBtn').textContent='🖥 이 탭 화면 공유'; });
+    vstream.getVideoTracks()[0].addEventListener('ended', ()=>{ vstream=null; vsrc='none'; $('vCapBtn').textContent='이 탭 화면 공유'; });
   }catch(e){ toast('화면 공유가 취소됐거나 지원되지 않아요'); }
 };
 $('vCalib').onclick = ()=>{ if (!vSource()){ toast('먼저 영상을 열거나 화면을 공유하세요'); return; } vcal.toggle(); };
-$('vRun').onclick = ()=>{ vAnalyze=!vAnalyze; $('vRun').textContent = vAnalyze?'⏸ 분석 중지':'▶ 자동 분석 시작'; $('vRun').classList.toggle('red', vAnalyze); if (vAnalyze && vsrc==='file') vvideo.play(); };
+$('vRun').onclick = ()=>{ vAnalyze=!vAnalyze; $('vRun').textContent = vAnalyze?'분석 중지':'자동 분석 시작'; $('vRun').classList.toggle('red', vAnalyze); if (vAnalyze && vsrc==='file') vvideo.play(); };
 let vPending = [];
 function onVideoEvent(ev){
-  const best = ev.cands[0];
-  if (best && best.score >= S.settings.thresh/100){ if (best.id==='__ignore') return; addVEvent({t:ev.t, side:ev.side==='top'?'opp':'me', id:best.id, x:ev.x, y:ev.y, auto:true}); return; }
-  vPending.unshift(ev); if (vPending.length>8) vPending.length=8; renderVPending();
+  if (ev.stage === 0) vFlash.push({x:ev.x, y:ev.y, at:performance.now()}), vFlash.length > 20 && vFlash.shift();
+  if (ev.stage !== 2) return;
+  const R = identify(ev.cands, null, {learned:TPL.ids(), calib:TPL.calib()}), top = R.list[0];
+  if (R.best && R.best.id === '__ignore' && R.best.p >= 0.7) return;
+  const side = ev.side === 'top' ? 'opp' : 'me';
+  if (top && top.tpl && top.p >= Math.max(0.6, S.settings.thresh/100)){ addVEvent({t:ev.t, side, id:top.id, x:ev.x, y:ev.y, auto:true}); return; }
+  vPending.unshift({t:ev.t, side:ev.side, x:ev.x, y:ev.y, thumb:rgbThumb(ev.rgb), feats:ev.feats, ref:'vv'+ev.vid+'_'+Date.now(), cands:R.list.filter(c=>c.tpl).slice(0,4).map(c=>({id:c.id, score:c.p}))});
+  if (vPending.length > 8) vPending.length = 8; renderVPending();
 }
 function addVEvent(e){ e.match = vMatch; S.vlog.push(e); if (S.vlog.length > 5000) S.vlog.splice(0, S.vlog.length-5000); store.set('crc_vlog', S.vlog); PATTERNS = learnPatterns(S.vlog); renderVLearn(); }
 function renderVPending(){
@@ -696,15 +1024,15 @@ function renderVPending(){
   vPending.forEach((pd,idx)=>{
     const box=document.createElement('div'); box.className='pend'; box.innerHTML=`<img src="${pd.thumb}"><span class="chip" style="background:${pd.side==='top'?'#d33030':'#2775e0'};align-self:flex-start">${pd.side==='top'?'상대':'선수'}</span>`;
     const btns=document.createElement('div'); btns.className='btns';
-    pd.cands.filter(c=>c.id!=='__ignore').slice(0,4).forEach(c=>{ const b=document.createElement('button'); b.className='btn sm'; b.textContent=`${CARDS[c.id].name} ${Math.round(c.score*100)}%`; b.onclick=()=>vResolve(idx,c.id); btns.appendChild(b); });
+    (pd.cands||[]).filter(c=>c.id!=='__ignore' && CARDS[c.id]).slice(0,4).forEach(c=>{ const b=document.createElement('button'); b.className='btn sm'; b.innerHTML=`${esc(CARDS[c.id].name)} <small>${Math.round(c.score*100)}%</small>`; b.onclick=()=>vResolve(idx,c.id); btns.appendChild(b); });
     const sel=document.createElement('select'); sel.className='field'; sel.style.fontSize='12px';
     sel.innerHTML='<option value="">카드 선택…</option>'+Object.values(CARDS).filter(c=>c.id!=='unknown').sort((a,b)=>a.name.localeCompare(b.name,'ko')).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
     sel.onchange=()=>{ if (sel.value) vResolve(idx, sel.value); }; btns.appendChild(sel);
-    const ig=document.createElement('button'); ig.className='btn sm red'; ig.textContent='카드 아님'; ig.onclick=()=>{ learnTpl('__ignore',pd.raw,pd.feat); vPending.splice(idx,1); renderVPending(); }; btns.appendChild(ig);
+    const ig=document.createElement('button'); ig.className='btn sm red'; ig.textContent='카드 아님'; ig.onclick=()=>{ learnFeats('__ignore', pd.feats, 'i'+pd.ref); vPending.splice(idx,1); renderVPending(); }; btns.appendChild(ig);
     box.appendChild(btns); el.appendChild(box);
   });
 }
-function vResolve(idx,id){ const pd=vPending[idx]; if(!pd) return; learnTpl(id,pd.raw,pd.feat); addVEvent({t:pd.t, side:pd.side==='top'?'opp':'me', id, x:pd.x, y:pd.y}); vPending.splice(idx,1); renderVPending(); }
+function vResolve(idx,id){ const pd=vPending[idx]; if(!pd) return; learnFeats(id, pd.feats, 'u'+pd.ref); addVEvent({t:pd.t, side:pd.side==='top'?'opp':'me', id, x:pd.x, y:pd.y}); vPending.splice(idx,1); renderVPending(); }
 // 수동 표시: 진영 선택 → 카드 선택 → 아레나 클릭
 let vSide='opp', vSel=null, vFilter='all';
 document.querySelectorAll('.vside').forEach(b=> b.onclick=()=>{ vSide=b.dataset.s; document.querySelectorAll('.vside').forEach(x=>x.classList.toggle('on',x===b)); });
@@ -738,149 +1066,91 @@ function drawVArena(){
   const heat = vHeatId ? S.vlog.filter(e=>e.id===vHeatId && e.side==='me').map(e=>({id:e.id, name:CARDS[e.id]?.name, x:e.x, y:e.y})) : [];
   vArena.set({opp:recent.filter((_,i)=>S.vlog.slice(-6)[i].side==='opp'), mine: vHeatId ? [] : recent.filter((_,i)=>S.vlog.slice(-6)[i].side==='me'), recs: heat, hint: vHeatId ? `선수의 ${CARDS[vHeatId]?.name} 배치 ${heat.length}회` : '최근 기록'});
 }
-$('vExport').onclick = ()=>{ const blob=new Blob([JSON.stringify({vlog:S.vlog, templates:templates.map(t=>({id:t.id, raw:t.raw}))})],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='cr-coach-학습데이터.json'; a.click(); };
-$('vImport').onchange = async e=>{ const f=e.target.files[0]; if(!f) return; try{ const j=JSON.parse(await f.text()); (j.vlog||[]).forEach(x=>S.vlog.push(x)); store.set('crc_vlog',S.vlog); (j.templates||[]).forEach(t=>learnTpl(t.id,t.raw)); PATTERNS=learnPatterns(S.vlog); renderVLearn(); toast('학습 데이터를 합쳤어요'); }catch(err){ toast('파일을 읽지 못했어요'); } };
+function importTemplates(arr){ const tmp = VISION.TemplateStore(); tmp.load(arr, legacyTpl); for (const t of tmp.list) TPL.add(t.id, t.f, t.ff, t.g); saveTemplates(); }
+$('vExport').onclick = ()=>{ const blob=new Blob([JSON.stringify({vlog:S.vlog, templates:TPL.serialize()})],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='cr-coach-학습데이터.json'; a.click(); };
+$('vImport').onchange = async e=>{ const f=e.target.files[0]; if(!f) return; try{ const j=JSON.parse(await f.text()); (j.vlog||[]).forEach(x=>S.vlog.push(x)); store.set('crc_vlog',S.vlog); importTemplates(j.templates||[]); PATTERNS=learnPatterns(S.vlog); renderVLearn(); toast('학습 데이터를 합쳤어요'); }catch(err){ toast('파일을 읽지 못했어요'); } };
 $('vClear').onclick = ()=>{ if (confirm('영상에서 학습한 플레이 기록을 모두 지울까요?')){ S.vlog=[]; store.set('crc_vlog',[]); PATTERNS={}; renderVLearn(); } };
 renderVPending(); renderVLearn();
 
 /* ================= 휴대폰 실시간 코치 =================
    본 앱: [📱 휴대폰 실시간 코치 시작] → 화면 녹화 허락 → 게임 위에 코치 창이 뜸
-   코치 창(#overlay): 네이티브가 보내는 화면 프레임을 읽어
-   - 상대 카드 감지(위쪽 절반) → 상대 엘릭서·덱·손패
-   - 내 엘릭서 바를 직접 읽음(정확한 값) → 엘릭서가 뚝 떨어지면 내가 카드를 낸 것으로 기록
-   - 아래쪽 절반 감지 → 내가 낸 위치·카드 확인
-   - 엘릭서 바가 보이면 경기 시작, 6초 이상 안 보이면 경기 종료 → 기록을 본 앱으로 넘김
-   사용자는 게임 중 아무것도 입력하지 않아도 됨 */
-const PCAL_DEFAULT = {x:0.02, y:0.075, w:0.96, h:0.70};
-const ECAL_DEFAULT = {x:0.27, y:0.948, w:0.70, h:0.022};
-S.pcalib = store.get('crc_pcalib', null) || PCAL_DEFAULT;
-S.ecalib = store.get('crc_ecalib', null) || ECAL_DEFAULT;
-const frameCv = document.createElement('canvas'); frameCv.width = 360; frameCv.height = 780; frameCv.frameId = 0;
+   코치 창(#overlay): 네이티브가 보내는 화면 프레임(캡처 시각 포함)을 인식 엔진에 넣음
+   - 상대 배치 감지 → 상대 엘릭서·덱·사이클 / 내 엘릭서 바·손패 → 내 엘릭서(정확값)·내가 낸 카드
+   - 엘릭서 바가 차오르기 시작하면 경기 시작, 6초 이상 안 보이면 종료 → 기록을 본 앱으로 넘김
+   - 코치 창 자체는 캡처에서 검게 나오므로 그 영역은 인식에서 뺌 */
+S.pcalib = store.get('crc_pcalib', null) || Object.assign({}, CAL_DEFAULT.arena);
+S.ecalib = store.get('crc_ecalib', null) || Object.assign({}, CAL_DEFAULT.bar);
+S.hcalib = store.get('crc_hcalib', {});
+const frameCv = document.createElement('canvas'); frameCv.width = 400; frameCv.height = 866;
 const frameCtx = frameCv.getContext('2d', {willReadFrequently:true});
-let frameReady = false, lastFrameUrl = null;
-
-function readElixir(){
-  const W = frameCv.width, H = frameCv.height, r = S.ecalib;
-  const x0 = Math.round(r.x*W), x1 = Math.round((r.x+r.w)*W), y0 = Math.max(0, Math.round(r.y*H)), y1 = Math.min(H-1, Math.round((r.y+r.h)*H));
-  if (x1 - x0 < 10) return null;
-  const d = frameCtx.getImageData(x0, y0, x1-x0, Math.max(1,y1-y0+1)).data, w = x1-x0, h = Math.max(1,y1-y0+1);
-  const rows = [Math.floor(h*0.3), Math.floor(h*0.5), Math.floor(h*0.7)];
-  const N = 50; let right = -1, cnt = 0;
-  for (let i=0;i<N;i++){
-    const x = Math.floor((i+0.5)/N*w); let pink = 0;
-    for (const ry of rows){ const k = (ry*w + x)*4, R=d[k], G=d[k+1], B=d[k+2]; if (R>150 && B>130 && G<130 && R-G>60) pink++; }
-    if (pink >= 2){ right = i; cnt++; }
-  }
-  if (cnt < 1) return {present:false, value:0};
-  return {present:true, value: Math.round((right+1)/N*100)/10};
-}
-function myCardForCost(cost){
-  const md = myDeck(); if (!md) return {id:'unknown', guess:false};
-  const hand = myHandOf(md.c, S.mine);
-  const pool = (hand && hand.hand.length ? hand.hand : md.c).filter(id=>CARDS[id] && !CARDS[id].tags.includes('mirror') && CARDS[id].cost===cost);
-  if (pool.length === 1) return {id:pool[0], guess:false};
-  if (pool.length > 1) return {id:pool[0], guess:true, alts:pool};
-  const any = md.c.filter(id=>CARDS[id] && CARDS[id].cost===cost);
-  return any.length ? {id:any[0], guess:true, alts:any} : {id:'unknown', guess:false};
-}
-function ovFrameTick(){
-  if (OV.calibOn) return;
-  const now = performance.now(), r = readElixir(); if (!r) return;
-  if (r.present){
-    OV.lastSeen = now; OV.seen = (OV.seen||0) + 1;
-    if (!S.started && OV.seen < 3) return;      // 3프레임 연속 보여야 경기 시작
-    if (!S.started){
-      startGame(); OV.hist = []; OV.regen = []; OV.shifted2 = OV.shifted3 = false;
-      if (r.value > 5.2) S.offset = Math.min(20, (r.value-5)*2.8);   // 늦게 켰을 때 대략 보정
-    }
-    const e = r.value; OV.hist.push({t:now, e}); if (OV.hist.length > 4) OV.hist.shift();
-    const prevMax = Math.max(...OV.hist.slice(0,-1).map(h=>h.e), -1);
-    const drop = prevMax - e;
-    if (drop >= 0.8 && now - OV.lastDrop > 450 && S.started){
-      OV.lastDrop = now; const cost = Math.max(1, Math.min(9, Math.round(drop)));
-      const g = myCardForCost(cost), ref = 'm' + (++OV.ref);
-      const p = {t:gameTime(), id:g.id, ref, auto:true, score:g.guess?0.5:0.9, fromElixir:true};
-      if (g.id === 'unknown') p.cost = cost; if (g.guess) p.guess = g.alts;
-      S.mine.push(p); OV.hist = [{t:now, e}]; OV.regen = [];
-    } else {
-      // 2배·3배 엘릭서 구간을 내 엘릭서 회복 속도로 자동 맞춤
-      if (e < 9.8){ OV.regen.push({t:now, e}); OV.regen = OV.regen.filter(x=>now-x.t < 3500); }
-      else OV.regen = [];
-      if (OV.regen.length >= 12){
-        const a = OV.regen[0], b = OV.regen[OV.regen.length-1], rate = (b.e-a.e)/((b.t-a.t)/1000), gt = gameTime();
-        if (!OV.shifted2 && rate > 0.55 && rate < 0.9 && gt < 116){ S.offset += 120-gt; OV.shifted2 = true; }
-        if (!OV.shifted3 && rate > 0.95 && gt < 236 && gt > 150 && S.settings.triple){ S.offset += 240-gt; OV.shifted3 = true; }
-      }
-    }
-    OV.e = e;
-  } else if ((OV.seen = 0, S.started) && now - OV.lastSeen > 6000){
-    endGame(); OV.e = null; ovFinishMatch();
-  }
-}
-window.__crFrame = (url, w, h)=>{
-  const im = new Image();
+let frameReady = false, lastFrameUrl = null, ovMask = null;
+const ovRects = ()=>({arena:S.pcalib, bar:S.ecalib, hand:S.hcalib.hand || calDefault('hand', {bar:S.ecalib}), next:S.hcalib.next || null});
+const ovVis = OVL ? newVision('ov', makeGrabber(()=>frameReady ? frameCv : null), {arenaActive:()=>S.started && !OV.calibOn && visionOK(), mask:()=>ovMask}) : null;
+const gameTimeAt = ms=> S.started ? Math.max(0, (ms - S.startAt)/1000 + S.offset) : 0;
+const OVSTAT = {frames:0, lastAt:0, fps:0, lagMs:0};
+window.__crFrame = (url, w, h, age, mx, my, mw, mh)=>{
+  const recv = performance.now(), im = new Image();
   im.onload = ()=>{
     if (frameCv.width !== w || frameCv.height !== h){ frameCv.width = w; frameCv.height = h; }
-    frameCtx.drawImage(im, 0, 0, w, h); frameCv.frameId++; frameReady = true; lastFrameUrl = url;
-    ovFrameTick(); ovDet.tick();
+    frameCtx.drawImage(im, 0, 0, w, h); frameReady = true; lastFrameUrl = url;
+    ovMask = mw > 0 ? {x:mx, y:my, w:mw, h:mh} : null;
+    const now = performance.now(), lag = (+age || 0) + (now - recv), at = now - lag;
+    OVSTAT.frames++; OVSTAT.fps = OVSTAT.lastAt ? OVSTAT.fps*0.9 + 100/(now - OVSTAT.lastAt) : 0; OVSTAT.lastAt = now; OVSTAT.lagMs = OVSTAT.lagMs*0.9 + lag*0.1;
+    if (OV.calibOn || !ovVis) return;
+    ovVis.setCalib(ovRects());
+    ovVis.process(gameTimeAt(at), at);
   };
   im.src = url;
 };
-function onOverlayEvent(ev){
-  const best = ev.cands[0], th = S.settings.thresh/100;
-  if (ev.side === 'top'){
-    if (best && best.id === '__ignore' && best.score >= th) return;
-    const ok = best && best.id !== '__ignore' && best.score >= th;
-    const ref = 'o' + (++OV.ref);
-    S.plays.push({t:ev.t, id: ok ? best.id : 'unknown', ref, auto:true, score: best ? best.score : 0, thumb:ev.thumb, x:ev.x, y:ev.y, lane:laneOf(ev.x)});
-    if (!ok){ S.pending.unshift(Object.assign({}, ev, {ref, cands:ev.cands.filter(c=>c.id!=='__ignore').slice(0,3)})); if (S.pending.length > 12) S.pending.length = 12; }
-    else if (CARDS[best.id]) speak('opp:'+best.id, `상대 ${CARDS[best.id].name}`);
-  } else {
-    // 내 진영: 방금 엘릭서가 줄어든 카드에 위치(와 카드 확인)를 붙임
-    const p = S.mine.slice().reverse().find(m=>m.fromElixir && m.x == null && ev.t - m.t < 2.5 && ev.t - m.t > -0.5);
-    if (!p) return;
-    p.x = ev.x; p.y = ev.y; p.lane = laneOf(ev.x); p.thumb = ev.thumb;
-    if (best && best.id !== '__ignore' && best.score >= th && (!p.guess || p.guess.includes(best.id) || p.id === 'unknown')){ p.id = best.id; delete p.guess; delete p.cost; p.score = best.score; }
-    else if (p.guess || p.id === 'unknown'){ S.pending.unshift(Object.assign({}, ev, {ref:p.ref, cands:ev.cands.filter(c=>c.id!=='__ignore').slice(0,3)})); if (S.pending.length > 12) S.pending.length = 12; }
-  }
-  render();
-}
-const ovDet = Detector({video:()=>OVL && frameReady ? frameCv : null, calib:()=>S.pcalib, active:()=>OVL && S.started && !OV.calibOn, sides:()=>['top','bottom'], sens:()=>S.settings.sens, time:gameTime, onEvent:onOverlayEvent});
 function ovFinishMatch(){
-  const slim = a => a.map(p=>{ const q = Object.assign({}, p); delete q.feat; return q; });
+  const slim = a => a.map(p=>{ const q = Object.assign({}, p); delete q.feats; delete q.live; delete q.post; return q; });
   const result = {at:Date.now(), plays:slim(S.plays), mine:slim(S.mine), endedAt:S.endedAt,
-    pending: S.pending.map(p=>({t:p.t, side:p.side, x:p.x, y:p.y, thumb:p.thumb, raw:p.raw, ref:p.ref, cands:p.cands}))};
+    pending: S.pending.map(p=>({t:p.t, side:p.side, x:p.x, y:p.y, thumb:p.thumb, ref:p.ref, cands:p.cands, feats:(p.feats||[]).map(f=>TPL.packFeat(f))}))};
   store.set('crc_ovresult', result);
   try{ if (window.CRNative) CRNative.saveShared(JSON.stringify(result)); }catch(e){}
   speak('end', S.pending.length ? `경기 종료. 확인할 장면 ${S.pending.length}개는 앱에서 골라주세요` : '경기 종료');
 }
 
 /* ---- 코치 창 화면 ---- */
+const ICON = {
+  vol:'<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path class="w" d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg>',
+  mute:'<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path class="w" d="M17 9l5 6M22 9l-5 6"/></svg>',
+  more:'<svg viewBox="0 0 24 24"><path class="w" d="M6 9l6 6 6-6"/></svg>',
+  less:'<svg viewBox="0 0 24 24"><path class="w" d="M6 15l6-6 6 6"/></svg>',
+  cal:'<svg viewBox="0 0 24 24"><path class="w" d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/><circle cx="12" cy="12" r="2.5"/></svg>',
+  min:'<svg viewBox="0 0 24 24"><path class="w" d="M6 12h12"/></svg>',
+  x:'<svg viewBox="0 0 24 24"><path class="w" d="M7 7l10 10M17 7L7 17"/></svg>',
+};
 function ovSetMode(m){ OV.mode = m; document.body.dataset.ov = m; try{ if (window.CRNative) CRNative.setMode(m); }catch(e){} }
 function buildOverlay(){
   const root = document.createElement('div'); root.id = 'ovRoot';
   root.innerHTML = `
-  <div id="ovBubble"><b id="ovBE">5</b><small>상대</small></div>
+  <div id="ovBubble"><svg class="ring" viewBox="0 0 64 64"><circle cx="32" cy="32" r="27" class="bg"/><circle cx="32" cy="32" r="27" class="fg" id="ovBRing"/></svg><b id="ovBE">5</b><small>상대</small></div>
   <div id="ovPanel">
-    <div class="ovBar" id="ovDrag"><span class="dot" id="ovDot"></span><b>CR 코치</b><span id="ovTime" class="tm">대기</span>
-      <button id="ovVoice" title="음성">🔊</button><button id="ovMore" title="자세히">▾</button><button id="ovCal" title="영역 맞추기">⚙</button><button id="ovMin" title="접기">–</button><button id="ovX" title="끄기">✕</button></div>
-    <div class="ovE"><div class="eb opp"><small>상대</small><b id="ovOE">5.0</b></div><div class="eb me"><small>나</small><b id="ovME">5.0</b></div><div class="eb df"><small>차이</small><b id="ovDE">0</b></div></div>
+    <div class="ovBar" id="ovDrag"><span class="dot" id="ovDot"></span><b class="tm" id="ovTime">대기</b><span class="ph" id="ovPhase"></span><span class="sp"></span>
+      <button id="ovVoice" title="음성"></button><button id="ovMore" title="자세히">${ICON.more}</button><button id="ovCal" title="영역 맞추기">${ICON.cal}</button><button id="ovMin" title="접기">${ICON.min}</button><button id="ovX" title="끄기">${ICON.x}</button></div>
+    <div class="ovE">
+      <div class="erow opp"><div class="drop"><b id="ovOE">5.0</b></div><div class="emeta"><div class="elab"><span>상대</span><em id="ovORange"></em></div><div class="ebar" id="ovOBar"></div></div></div>
+      <div class="erow me"><div class="drop"><b id="ovME">5.0</b></div><div class="emeta"><div class="elab"><span>나</span><em id="ovDE"></em></div><div class="ebar" id="ovMBar"></div></div></div>
+    </div>
+    <div class="ovDeck" id="ovDeck"></div>
     <div id="ovRec" class="ovRec">게임을 시작하면 자동으로 따라가요</div>
-    <div id="ovHand" class="ovHand"></div>
     <div id="ovMoreBox" class="ovMore"></div>
   </div>
   <div id="ovCalib">
     <canvas id="ovCalCv"></canvas>
-    <div class="ovCalBar"><div id="ovCalMsg"></div>
-      <div class="row"><button class="btn sm" id="ovCalReset">기본값</button><button class="btn sm red" id="ovCalCancel">취소</button><button class="btn sm green" id="ovCalNext">다음</button></div></div>
+    <div class="ovCalBar"><div class="calTop"><b id="ovCalT"></b><span id="ovCalMsg"></span></div>
+      <div class="row"><button class="btn sm" id="ovCalReset">기본값</button><button class="btn sm" id="ovCalCancel">취소</button><span class="sp"></span><button class="btn sm" id="ovCalPrev">이전</button><button class="btn sm green" id="ovCalNext">다음</button></div></div>
   </div>`;
   document.body.appendChild(root);
+  // 엘릭서 칸 10개
+  ['ovOBar','ovMBar'].forEach(id=>{ const el = $(id); for (let i=0;i<10;i++){ const s = document.createElement('i'); s.innerHTML = '<u></u>'; el.appendChild(s); } const r = document.createElement('span'); r.className = 'rng'; el.appendChild(r); });
   ovSetMode('panel');
-  // 끌어서 옮기기 (창이 손가락을 따라오도록 누른 위치 기준으로 이동)
+  // 끌어서 옮기기
   const dragEl = $('ovDrag'), bub = $('ovBubble');
   function makeDrag(el, onTap){
     let st = null, moved = 0, raf = 0, pend = {x:0, y:0};
-    el.addEventListener('pointerdown', e=>{ if (e.target.tagName === 'BUTTON') return; st = {x:e.clientX, y:e.clientY}; moved = 0; el.setPointerCapture(e.pointerId); });
+    el.addEventListener('pointerdown', e=>{ if (e.target.closest('button')) return; st = {x:e.clientX, y:e.clientY}; moved = 0; el.setPointerCapture(e.pointerId); });
     el.addEventListener('pointermove', e=>{ if (!st) return; const dx = e.clientX-st.x, dy = e.clientY-st.y; moved += Math.abs(dx)+Math.abs(dy);
       pend = {x:dx*devicePixelRatio, y:dy*devicePixelRatio};
       if (!raf) raf = requestAnimationFrame(()=>{ raf = 0; try{ if (window.CRNative) CRNative.moveBy(pend.x, pend.y); }catch(err){} }); });
@@ -889,73 +1159,96 @@ function buildOverlay(){
   makeDrag(dragEl, null); makeDrag(bub, ()=>ovSetMode(OV.more ? 'tall' : 'panel'));
   $('ovMin').onclick = ()=> ovSetMode('bubble');
   $('ovX').onclick = ()=>{ if (S.started){ endGame(); ovFinishMatch(); } try{ CRNative.close(); }catch(e){} };
-  $('ovMore').onclick = ()=>{ OV.more = !OV.more; ovSetMode(OV.more ? 'tall' : 'panel'); $('ovMore').textContent = OV.more ? '▴' : '▾'; };
-  const vb = $('ovVoice'); const setV = ()=> vb.textContent = store.get('crc_ovvoice', true) ? '🔊' : '🔇'; setV();
+  $('ovMore').onclick = ()=>{ OV.more = !OV.more; ovSetMode(OV.more ? 'tall' : 'panel'); $('ovMore').innerHTML = OV.more ? ICON.less : ICON.more; };
+  const vb = $('ovVoice'); const setV = ()=> vb.innerHTML = store.get('crc_ovvoice', true) ? ICON.vol : ICON.mute; setV();
   vb.onclick = ()=>{ store.set('crc_ovvoice', !store.get('crc_ovvoice', true)); setV(); };
-  // 영역 맞추기: 1) 경기장 2) 내 엘릭서 바
-  const cv = $('ovCalCv'), cx = cv.getContext('2d'); let step = 0, tmp = null, drag = null; const bg = new Image();
+  // 영역 맞추기 (경기장 → 엘릭서 바 → 내 카드 4장 → 다음 카드)
+  const cv = $('ovCalCv'), cx = cv.getContext('2d'), bg = new Image();
+  const flow = CalibFlow({canvas:cv, rects:()=>({arena:S.pcalib, bar:S.ecalib, hand:S.hcalib.hand || null, next:S.hcalib.next || null}),
+    ui:{title:$('ovCalT'), msg:$('ovCalMsg'), prev:$('ovCalPrev'), next:$('ovCalNext'), reset:$('ovCalReset'), cancel:$('ovCalCancel')},
+    save:r=>{ S.pcalib = r.arena; S.ecalib = r.bar; S.hcalib = {hand:r.hand, next:r.next}; store.set('crc_pcalib', S.pcalib); store.set('crc_ecalib', S.ecalib); store.set('crc_hcalib', S.hcalib); toast('영역 저장 완료'); },
+    end:()=>{ OV.calibOn = false; ovSetMode(OV.more ? 'tall' : 'panel'); }});
   function draw(){
     if (!OV.calibOn) return;
-    cv.width = innerWidth; cv.height = innerHeight; cx.clearRect(0,0,cv.width,cv.height);
-    if (bg.complete && bg.naturalWidth) cx.drawImage(bg, 0, 0, cv.width, cv.height); else { cx.fillStyle = '#0b1f4d'; cx.fillRect(0,0,cv.width,cv.height); }
-    const rc = drag ? {x:Math.min(drag.a.x,drag.b.x), y:Math.min(drag.a.y,drag.b.y), w:Math.abs(drag.a.x-drag.b.x), h:Math.abs(drag.a.y-drag.b.y)} : tmp[step];
-    const other = tmp[1-step];
-    cx.lineWidth = 2; cx.setLineDash([5,4]); cx.strokeStyle = 'rgba(255,255,255,.5)'; cx.strokeRect(other.x*cv.width, other.y*cv.height, other.w*cv.width, other.h*cv.height); cx.setLineDash([]);
-    cx.lineWidth = 3; cx.strokeStyle = step === 0 ? '#ffe36b' : '#ff8af1'; cx.strokeRect(rc.x*cv.width, rc.y*cv.height, rc.w*cv.width, rc.h*cv.height);
-    if (step === 0){ const ry = (rc.y+rc.h*RIVER)*cv.height, ry2 = (rc.y+rc.h*17/32)*cv.height; cx.setLineDash([6,4]); cx.strokeStyle = '#ff8af1'; cx.beginPath(); cx.moveTo(rc.x*cv.width, ry); cx.lineTo((rc.x+rc.w)*cv.width, ry); cx.moveTo(rc.x*cv.width, ry2); cx.lineTo((rc.x+rc.w)*cv.width, ry2); cx.stroke(); cx.setLineDash([]); }
+    if (cv.width !== innerWidth || cv.height !== innerHeight){ cv.width = innerWidth; cv.height = innerHeight; }
+    cx.clearRect(0, 0, cv.width, cv.height);
+    if (bg.complete && bg.naturalWidth) cx.drawImage(bg, 0, 0, cv.width, cv.height); else { cx.fillStyle = '#0a1430'; cx.fillRect(0, 0, cv.width, cv.height); }
+    flow.draw(cx, cv.width, cv.height);
     requestAnimationFrame(draw);
   }
-  const msg = ()=> ($('ovCalMsg').parentNode.classList.toggle('s2', step === 1), $('ovCalMsg').innerHTML = step === 0
-    ? '<b>1/2 경기장</b> — 상대 킹 타워 위 끝부터 내 킹 타워 아래 끝까지 드래그하세요. 분홍 점선 두 줄이 강의 위·아래에 오면 정확해요.'
-    : '<b>2/2 엘릭서 바</b> — 화면 맨 아래 분홍색 엘릭서 바(숫자 오른쪽 막대)만 감싸도록 드래그하세요.');
-  const toN = e=>({x:Math.max(0,Math.min(1,e.clientX/innerWidth)), y:Math.max(0,Math.min(1,e.clientY/innerHeight))});
-  cv.addEventListener('pointerdown', e=>{ drag = {a:toN(e), b:toN(e)}; cv.setPointerCapture(e.pointerId); });
-  cv.addEventListener('pointermove', e=>{ if (drag) drag.b = toN(e); });
-  cv.addEventListener('pointerup', ()=>{ if (!drag) return; const rc = {x:Math.min(drag.a.x,drag.b.x), y:Math.min(drag.a.y,drag.b.y), w:Math.abs(drag.a.x-drag.b.x), h:Math.abs(drag.a.y-drag.b.y)}; drag = null;
-    if (rc.w > 0.1 && rc.h > (step === 0 ? 0.2 : 0.005)) tmp[step] = rc; });
-  $('ovCal').onclick = ()=>{
-    OV.calibOn = true; step = 0; tmp = [Object.assign({}, S.pcalib), Object.assign({}, S.ecalib)];
-    if (lastFrameUrl) bg.src = lastFrameUrl; ovSetMode('full'); msg(); $('ovCalNext').textContent = '다음'; requestAnimationFrame(draw);
-  };
-  $('ovCalReset').onclick = ()=>{ tmp[step] = Object.assign({}, step === 0 ? PCAL_DEFAULT : ECAL_DEFAULT); };
-  $('ovCalCancel').onclick = ()=>{ OV.calibOn = false; ovSetMode(OV.more ? 'tall' : 'panel'); };
-  $('ovCalNext').onclick = ()=>{
-    if (step === 0){ step = 1; msg(); $('ovCalNext').textContent = '완료'; return; }
-    S.pcalib = tmp[0]; S.ecalib = tmp[1]; store.set('crc_pcalib', S.pcalib); store.set('crc_ecalib', S.ecalib);
-    OV.calibOn = false; ovSetMode(OV.more ? 'tall' : 'panel'); toast('영역 저장 완료');
-  };
+  $('ovCal').onclick = ()=>{ OV.calibOn = true; if (lastFrameUrl) bg.src = lastFrameUrl; ovSetMode('full'); flow.start(); requestAnimationFrame(draw); };
+}
+const fmtE1 = v=> v >= 9.95 ? '10' : v.toFixed(1);
+function setEBar(el, E, lo, hi){
+  const segs = el.children;
+  for (let i=0;i<10;i++) segs[i].firstChild.style.width = Math.max(0, Math.min(1, E - i))*100 + '%';
+  const r = el.lastChild;
+  if (hi - lo >= 0.3){ r.style.display = 'block'; r.style.left = lo*10 + '%'; r.style.width = (hi - lo)*10 + '%'; } else r.style.display = 'none';
 }
 function renderOverlay(sim, simMe, rec, deck, inf, tips){
   if (!$('ovRoot')) return;
   const t = gameTime(), E = sim.E, myE = simMe.E, d = myE - E;
-  $('ovBE').textContent = E >= 9.95 ? '10' : E.toFixed(1);
-  $('ovOE').textContent = E >= 9.95 ? '10' : E.toFixed(1);
-  $('ovME').textContent = myE >= 9.95 ? '10' : myE.toFixed(1);
-  $('ovDE').textContent = (d >= 0 ? '+' : '') + d.toFixed(1); $('ovDE').parentNode.className = 'eb df ' + (d > 0.4 ? 'good' : d < -0.4 ? 'bad' : '');
+  $('ovBE').textContent = fmtE1(E);
+  const ring = $('ovBRing'); ring.style.strokeDasharray = `${(E/10)*169.6} 169.6`;
+  $('ovOE').textContent = fmtE1(E); $('ovME').textContent = fmtE1(myE);
+  $('ovORange').textContent = sim.hi - sim.lo >= 0.3 ? `${sim.lo.toFixed(1)}~${sim.hi.toFixed(1)}` : '정확';
+  const de = $('ovDE'); de.textContent = S.started ? (Math.abs(d) < 0.5 ? '비슷' : (d > 0 ? `+${d.toFixed(1)} 앞섬` : `${d.toFixed(1)} 뒤짐`)) : ''; de.className = d > 0.4 ? 'good' : d < -0.4 ? 'bad' : '';
+  setEBar($('ovOBar'), E, sim.lo, sim.hi); setEBar($('ovMBar'), myE, myE, myE);
   $('ovDot').className = 'dot ' + (S.started ? 'on' : frameReady ? 'wait' : '');
-  $('ovTime').textContent = S.started ? `${$('timer').textContent} · ${phaseAt(t, S.settings.triple).label}` : (frameReady ? '경기 대기' : '화면 연결 대기');
+  $('ovTime').textContent = S.started ? $('timer').textContent : (frameReady ? '경기 대기' : '화면 연결 대기');
+  const ph = S.started ? phaseAt(t, S.settings.triple) : null; $('ovPhase').textContent = ph ? ph.label.replace('엘릭서','').trim() : ''; $('ovPhase').className = 'ph ' + (ph ? ph.cls : '');
+  // 상대 덱 8칸: 손패(밝게) / 대기열(어둡게 + 몇 장 뒤) / 아직 모름(예상 카드 흐리게)
+  const dk = $('ovDeck'); let html = '';
+  const slots = deck.known.map(id=>({id, st:deck.status[id]}));
+  inf.predicted.slice(0, 8 - slots.length).forEach(p=>slots.push({id:p.id, pred:p.prob}));
+  while (slots.length < 8) slots.push({});
+  for (const sl of slots){
+    if (!sl.id){ html += '<i class="c empty">?</i>'; continue; }
+    const u = imgUrl(sl.id), nm = esc(CARDS[sl.id].name.slice(0,3));
+    const cls = sl.pred != null ? 'pred' : sl.st.where === 'hand' ? (deck.seq.length >= 4 ? 'hand' : 'maybe') : 'queue';
+    const badge = sl.pred != null ? `${Math.round(sl.pred*100)}` : sl.st.where === 'queue' && sl.st.returnsIn ? sl.st.returnsIn : '';
+    html += `<i class="c ${cls}">${u ? `<img src="${esc(u)}" onerror="this.remove()">` : ''}<span class="n">${nm}</span>${badge !== '' ? `<em>${badge}</em>` : ''}</i>`;
+  }
+  dk.innerHTML = html;
   const r = rec && rec.recs[0], box = $('ovRec');
-  if (!S.started) box.innerHTML = S.endedAt ? '경기 종료 — 앱에서 기록을 확인하세요' : '게임을 시작하면 자동으로 따라가요';
-  else if (!r) box.innerHTML = `<span>${esc(rec ? rec.headline : '')}</span>`;
+  if (!S.started){ box.className = 'ovRec'; box.innerHTML = S.endedAt ? '경기 종료 · 앱에서 기록을 확인하세요' : (frameReady ? '경기가 시작되면 자동으로 따라가요' : '화면 연결을 기다리는 중'); }
+  else if (!r){ box.className = 'ovRec'; box.innerHTML = `<span>${esc(rec ? rec.headline : '')}</span>`; }
   else {
     const u = imgUrl(r.id);
-    box.innerHTML = `${u ? `<img src="${esc(u)}" onerror="this.remove()">` : ''}<div><b>${rec.mode==='defend'?'🛡':rec.mode==='attack'?'⚔️':'♻️'} ${esc(CARDS[r.id].name)}</b> <span class="when">${esc(r.when)}</span><br><small>📍 ${esc(r.how)}</small></div>`;
     box.className = 'ovRec ' + rec.mode;
+    box.innerHTML = `${u ? `<img src="${esc(u)}" onerror="this.remove()">` : ''}<div class="tx"><b>${esc(CARDS[r.id].name)}</b><span class="when">${esc(r.when)}</span><small>${esc(r.how)}</small></div><span class="mode">${rec.mode==='defend'?'수비':rec.mode==='attack'?'공격':'사이클'}</span>`;
   }
-  $('ovHand').textContent = deck.seq.length >= 4 ? `상대 손패: ${deck.hand.map(id=>CARDS[id].name).join(', ')}` : deck.known.length ? `상대 카드: ${deck.known.map(id=>CARDS[id].name).join(', ')}` : '';
   if (OV.more){
     const g = inf.groups[0];
-    $('ovMoreBox').innerHTML = (g ? `<div><b>상대 덱 추정</b> ${esc(g.n)} ${Math.round(g.prob*100)}%</div>` : '')
-      + (inf.predicted.length ? `<div class="muted">아직 안 나온 카드 예상: ${inf.predicted.slice(0,3).map(p=>esc(CARDS[p.id].name)).join(', ')}</div>` : '')
-      + tips.slice(0,3).map(tp=>`<div class="tip">${esc(tp.text)}</div>`).join('');
+    $('ovMoreBox').innerHTML = (g ? `<div class="row1"><b>상대 덱 추정</b><span>${esc(g.n)} ${Math.round(g.prob*100)}%</span></div>` : '')
+      + tips.slice(0,3).map(tp=>`<div class="tip">${esc(tp.text)}</div>`).join('')
+      + `<div class="diag">인식 ${OVSTAT.fps.toFixed(0)}fps · 지연 ${Math.round(OVSTAT.lagMs)}ms · 처리 ${ovVis ? ovVis.stats.ms.toFixed(0) : 0}ms · 학습 ${TPL.count()}장</div>`;
   }
 }
 if (OVL) buildOverlay();
 
+/* ---- 본 앱(iPhone·iPad): 애플 정책상 앱 안에서 다른 앱 화면을 읽을 수 없어요 → 직접 입력 모드로 안내 ---- */
+const IOS_APP = (()=>{ try{ const C = window.Capacitor; return !OVL && !!(C && C.getPlatform && C.getPlatform() === 'ios'); }catch(e){ return false; } })();
+if (IOS_APP){
+  const IOS_MSG = '아이폰·아이패드 앱은 애플 정책 때문에 클래시로얄 화면을 읽을 수 없어요. 상대가 낸 카드를 아래 [상대가 낸 카드]에서 눌러 기록하세요.';
+  $('previewHint').innerHTML = '아이폰·아이패드에서는 <b>화면 자동 인식이 안 돼요</b><br>(애플이 앱끼리 화면을 읽는 걸 막아요)'
+    + '<br><br><b>이렇게 쓰세요</b>: 게임은 휴대폰으로 하고, 이 화면에서<br>상대가 낸 카드를 <b>[상대가 낸 카드]</b>에서 눌러 주세요.<br>엘릭서 계산·덱 추정·코칭은 그대로 돼요.'
+    + '<br><br>자동 인식이 필요하면 <b>PC 앱 + 휴대폰 미러링</b>이나 <b>안드로이드 앱</b>을 쓰세요.';
+  $('btnCapture').textContent = '사용 방법';
+  $('btnCapture').onclick = ()=> toast(IOS_MSG);
+  $('btnCalib').style.display = 'none';
+  // 자동 감지용 옵션(체크박스·감도)은 아이폰에서 쓸 수 없으니 숨김. 저장된 설정값은 그대로 둬서 PC와 동기화해도 안 바뀜
+  ['chkAuto','sens'].forEach(id=>{ const r = $(id) && $(id).closest('.row'); if (r) r.style.display = 'none'; });
+  $('capStatus').textContent = '직접 입력 모드';
+  const pend = $('pending') && $('pending').closest('.panel'); if (pend) pend.style.display = 'none';   // 자동 감지 결과 확인 칸
+
+  const cap = $('capStatus').closest('.panel'); if (cap){ const h = cap.querySelector('.ribbon h2'); if (h) h.textContent = '아이폰·아이패드 안내'; }
+}
+
 /* ---- 본 앱(안드로이드): 시작 버튼 + 경기 후 기록 가져오기 ---- */
 const SC = (()=>{ try{ const C = window.Capacitor; return !OVL && C && C.getPlatform && C.getPlatform() === 'android' && C.registerPlugin ? C.registerPlugin('ScreenCoach') : null; }catch(e){ return null; } })();
 if (SC){
-  const b = document.createElement('button'); b.className = 'btn gold'; b.id = 'btnPhoneCoach'; b.textContent = '📱 휴대폰 실시간 코치 시작';
+  const b = document.createElement('button'); b.className = 'btn gold'; b.id = 'btnPhoneCoach'; b.textContent = '휴대폰 실시간 코치 시작';
   $('btnCapture').parentNode.insertBefore(b, $('btnCapture'));
   $('previewHint').textContent = '[휴대폰 실시간 코치 시작] → "다른 앱 위에 표시" 허용 → 화면 녹화 "시작"을 누르고 클래시로얄을 켜세요. 게임 중엔 아무것도 누르지 않아도 돼요.';
   b.onclick = async ()=>{
@@ -963,8 +1256,9 @@ if (SC){
       let p = await SC.hasOverlayPermission();
       if (p.running){ await SC.stop(); toast('실시간 코치를 껐어요'); return; }
       if (!p.granted){ toast('"다른 앱 위에 표시"를 허용해주세요'); p = await SC.requestOverlayPermission(); if (!p.granted){ toast('권한이 없으면 게임 위에 코치 창을 띄울 수 없어요'); return; } }
-      const cfg = {}; ['crc_settings','crc_pcalib','crc_ecalib','crc_ovvoice'].forEach(k=>{ const v = localStorage.getItem(k); if (v != null) cfg[k] = v; });
-      await SC.start({config: JSON.stringify(cfg), width: 360, fps: 8});
+      const cfg = {}; ['crc_settings','crc_pcalib','crc_ecalib','crc_hcalib','crc_ovvoice'].forEach(k=>{ const v = localStorage.getItem(k); if (v != null) cfg[k] = v; });
+      // 400px · 초당 12장: 손패·작은 유닛까지 읽을 해상도와 실시간성의 균형
+      await SC.start({config: JSON.stringify(cfg), width: 400, fps: 12});
     }catch(e){ toast(String(e && e.message || e) === 'denied' ? '화면 녹화를 허용해야 해요' : '시작하지 못했어요: ' + (e && e.message || e)); }
   };
 }
@@ -973,8 +1267,8 @@ function importOverlayResult(res){
   store.set('crc_ovseen', res.at);
   if (S.started) return;
   S.plays = res.plays || []; S.mine = res.mine || []; S.endedAt = res.endedAt || 0;
-  S.pending = (res.pending || []).map(p=>Object.assign({}, p));
-  templates = store.get('crc_templates', []).map(t=>({id:t.id, raw:t.raw, f:featureFromRGBA(b64ToRGBA(t.raw))}));
+  S.pending = (res.pending || []).map(p=>Object.assign({}, p, {feats:(p.feats||[]).map(f=>{ try{ return TPL.unpackFeat(f); }catch(e){ return null; } }).filter(Boolean)}));
+  loadTemplates();   // 코치 창이 경기 중 스스로 학습한 것 반영
   try{ ACC.dirty.templates = Date.now(); saveAcc(); }catch(e){}
   renderPending(); render();
   toast(S.pending.length ? `방금 경기 기록을 가져왔어요 · 확인할 장면 ${S.pending.length}개` : '방금 경기 기록을 가져왔어요');
@@ -992,7 +1286,7 @@ if (!OVL) document.addEventListener('visibilitychange', async ()=>{
    서버에 올리고 다른 기기와 합쳐요. 서버가 꺼져 있거나 로그인 안 해도 앱은 지금처럼 동작해요. */
 const ACC = Object.assign({server: SERVER_URL || '', access:null, refresh:null, user:null, ver:{}, dirty:{}, lastSync:0}, store.get('crc_account', {}));
 const saveAcc = ()=>{ try{ localStorage.setItem('crc_account', JSON.stringify(ACC)); }catch(e){} };
-const KIND_OF = {crc_templates:'templates', crc_vlog:'vlog', crc_calib:'calib', crc_vcalib:'calib', crc_pcalib:'calib', crc_ecalib:'calib', crc_settings:'settings'};
+const KIND_OF = {crc_templates:'templates', crc_vlog:'vlog', crc_calib:'calib', crc_vcalib:'calib', crc_pcalib:'calib', crc_ecalib:'calib', crc_calib2:'calib', crc_hcalib:'calib', crc_settings:'settings'};
 let syncTimer = null, syncing = false, applyingRemote = false;
 store.onSet = k=>{
   const kind = KIND_OF[k]; if (!kind || applyingRemote) return;
@@ -1027,16 +1321,17 @@ async function api(method, p, body){
 function localOf(kind){
   if (kind === 'templates') return store.get('crc_templates', []);
   if (kind === 'vlog') return store.get('crc_vlog', []);
-  if (kind === 'calib') return {calib:store.get('crc_calib',null), vcalib:store.get('crc_vcalib',null), pcalib:store.get('crc_pcalib',null), ecalib:store.get('crc_ecalib',null)};
+  if (kind === 'calib') return {calib:store.get('crc_calib',null), vcalib:store.get('crc_vcalib',null), pcalib:store.get('crc_pcalib',null), ecalib:store.get('crc_ecalib',null), calib2:store.get('crc_calib2',null), hcalib:store.get('crc_hcalib',null)};
   const st = Object.assign({}, S.settings), md = myDeck(); delete st.myDeck; st.myDeckKey = md ? {n:md.n, v:md.v} : null; return st;
 }
 function mergeKind(kind, remote, local){
   if (remote == null) return local;
   if (kind === 'templates'){
     const seen = new Set(), out = [];
-    for (const t of remote.concat(local)) { if (!t || !t.id || !t.raw) continue; const k = t.id+'|'+t.raw.slice(0,64)+t.raw.length; if (seen.has(k)) continue; seen.add(k); out.push({id:t.id, raw:t.raw}); }
-    const cnt = {}, keep = [];   // 카드마다 최신 10장(카드 아님은 40장)만
-    for (let i = out.length-1; i >= 0; i--){ const id = out[i].id, cap = id==='__ignore'?40:10; cnt[id] = (cnt[id]||0)+1; if (cnt[id] <= cap) keep.unshift(out[i]); }
+    for (const t of remote.concat(local)) { if (!t || !t.id || !(t.raw || t.f)) continue; const body = t.f || t.raw; const k = t.id+'|'+body.slice(0,48)+body.length; if (seen.has(k)) continue; seen.add(k); out.push(t); }
+    out.sort((a,b)=>(a.at||0)-(b.at||0));
+    const cnt = {}, keep = [];   // 카드마다 최신 15장(카드 아님은 40장)만
+    for (let i = out.length-1; i >= 0; i--){ const id = out[i].id, cap = id==='__ignore'?40:15; cnt[id] = (cnt[id]||0)+1; if (cnt[id] <= cap) keep.unshift(out[i]); }
     return keep;
   }
   if (kind === 'vlog'){
@@ -1050,9 +1345,9 @@ const same = (a,b)=> JSON.stringify(a) === JSON.stringify(b);
 function applyLocal(kind, v){
   applyingRemote = true;
   try{
-    if (kind === 'templates'){ store.set('crc_templates', v); templates = v.map(t=>{ try{ return {id:t.id, raw:t.raw, f:featureFromRGBA(b64ToRGBA(t.raw))}; }catch(e){ return null; } }).filter(Boolean); }
+    if (kind === 'templates'){ store.set('crc_templates', v); loadTemplates(); }
     else if (kind === 'vlog'){ S.vlog = v; store.set('crc_vlog', v); PATTERNS = learnPatterns(S.vlog); renderVLearn(); }
-    else if (kind === 'calib'){ ['calib','vcalib','pcalib','ecalib'].forEach(k=>{ if (v[k]){ store.set('crc_'+k, v[k]); S[k] = v[k]; } }); }
+    else if (kind === 'calib'){ ['calib','vcalib','pcalib','ecalib','calib2','hcalib'].forEach(k=>{ if (v[k]){ store.set('crc_'+k, v[k]); S[k] = v[k]; } }); }
     else {
       const st = Object.assign({}, v), key = st.myDeckKey; delete st.myDeckKey;
       Object.assign(S.settings, st);
@@ -1172,7 +1467,131 @@ if (hash==='demo'){
   [[12,'cannon',8.5,21],[33,'skeletons',13,22],[50,'icegolem',3.5,30],[57,'hog',14.5,17]].forEach(([t,id,x,y])=>S.mine.push({t,id,x,y}));
 } else if (['decks','pro','settings','news','video'].includes(hash)){ const nb=document.querySelector(`.nb[data-tab="${hash}"]`); if (nb) nb.click(); }
 renderPending(); render();
+setTimeout(refreshHandPool, 400);
+if (/[?&]debug/.test(location.search)) window.__crDebug = {S, TPL, VIS, VISMAP, HANDREF, render, LIVE};
 setInterval(render, 250);
 hud.addEventListener('dblclick', ()=>{ if (document.body.classList.contains('minimode')) $('btnPip').click(); });
 (function loop(){ if ($('tab-battle').classList.contains('on')) arena.render(); if ($('tab-video').classList.contains('on')) vArena.render(); requestAnimationFrame(loop); })();
+
+/* ================= 배경음악 · 효과음 =================
+   음원 파일 없이 Web Audio로 직접 합성하는 이 앱만의 오리지널 곡·효과음이에요(저작권 걱정 없음, 오프라인 OK).
+   브라우저 정책상 첫 클릭/키 입력 뒤에 소리가 나기 시작해요. 게임 위 코치 창(#overlay)에서는 소리를 내지 않아요. */
+const SND = (()=>{
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (OVL || !AC) return {fx(){}, duck(){}, apply(){}, unlock(){}};
+  let ctx = null, master, bgmBus, sfxBus, timer = null, step = 0, nextT = 0, duckUntil = 0, noiseBuf = null;
+  const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+  const vol = () => Math.max(0, Math.min(1, (S.settings.sndVol == null ? 50 : S.settings.sndVol) / 100));
+  function init(){
+    if (ctx) return true;
+    try{ ctx = new AC(); }catch(e){ return false; }
+    const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 4; comp.connect(ctx.destination);
+    master = ctx.createGain(); master.connect(comp);
+    bgmBus = ctx.createGain(); bgmBus.gain.value = 0; bgmBus.connect(master);
+    sfxBus = ctx.createGain(); sfxBus.connect(master);
+    noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    apply(); return true;
+  }
+  /* --- 악기 --- */
+  function env(g, t, a, peak, dec){ g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + a + dec); }
+  function pluck(bus, m, t, dur, v){            // 류트·하프 느낌의 뜯는 소리
+    const o1 = ctx.createOscillator(), o2 = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+    o1.type = 'triangle'; o2.type = 'square'; o1.frequency.value = mtof(m); o2.frequency.value = mtof(m) * 1.003;
+    const g2 = ctx.createGain(); g2.gain.value = 0.18;
+    f.type = 'lowpass'; f.frequency.setValueAtTime(3200, t); f.frequency.exponentialRampToValueAtTime(700, t + dur);
+    o1.connect(f); o2.connect(g2); g2.connect(f); f.connect(g); g.connect(bus);
+    env(g, t, 0.006, v, dur); o1.start(t); o2.start(t); o1.stop(t + dur + 0.05); o2.stop(t + dur + 0.05);
+  }
+  function tone(bus, type, m, t, dur, v, slideTo){
+    const o = ctx.createOscillator(), g = ctx.createGain(); o.type = type; o.frequency.setValueAtTime(mtof(m), t);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(mtof(slideTo), t + dur);
+    o.connect(g); g.connect(bus); env(g, t, 0.01, v, dur); o.start(t); o.stop(t + dur + 0.05);
+  }
+  function pad(bus, notes, t, dur, v){          // 부드러운 현악 화음
+    const f = ctx.createBiquadFilter(), g = ctx.createGain(); f.type = 'lowpass'; f.frequency.value = 1100; f.connect(g); g.connect(bus);
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(v, t + 0.35); g.gain.linearRampToValueAtTime(v * 0.7, t + dur - 0.1); g.gain.linearRampToValueAtTime(0.0001, t + dur);
+    notes.forEach((m, i)=>{ const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = mtof(m); o.detune.value = (i - 1) * 6; o.connect(f); o.start(t); o.stop(t + dur + 0.05); });
+  }
+  function noise(bus, t, dur, v, type, freq){
+    const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+    s.buffer = noiseBuf; f.type = type; f.frequency.value = freq; s.connect(f); f.connect(g); g.connect(bus);
+    env(g, t, 0.002, v, dur); s.start(t); s.stop(t + dur + 0.05);
+  }
+  function kick(bus, t, v){ const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.setValueAtTime(130, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.14); o.connect(g); g.connect(bus); env(g, t, 0.003, v, 0.18); o.start(t); o.stop(t + 0.25); }
+
+  /* --- 오리지널 곡: 경쾌한 중세 행진곡 풍, 8마디 반복 (F장조, 118BPM) --- */
+  const BPM = 118, EIGHTH = 60 / BPM / 2, _ = null;
+  const MEL = [
+    72,_,69,72, 77,76,74,72,   76,_,72,76, 79,77,76,74,   74,_,69,74, 77,76,74,72,   70,72,74,77, 76,_,74,_,
+    72,_,69,72, 77,79,81,77,   79,_,76,79, 84,_,79,_,     79,77,76,74, 72,74,76,79,   77,_,72,_, 65,_,_,_ ];
+  const CH = [[53,57,60],[48,52,55],[50,53,57],[46,50,53],[53,57,60],[48,52,55],[55,58,62],[53,57,60]];   // F C Dm Bb F C Gm F
+  const BASS = [[41,48],[36,43],[38,45],[34,41],[41,48],[36,43],[43,36],[41,36]];
+  function schedule(t, i){
+    const bar = Math.floor(i / 8) % 8, s = i % 8, m = MEL[i % 64];
+    if (m != null) pluck(bgmBus, m, t, EIGHTH * 1.6, 0.16);
+    if (s % 2 === 0 && (s === 2 || s === 6)) pluck(bgmBus, CH[bar][1] + 12, t, EIGHTH * 1.2, 0.05);   // 뒷박 반주
+    if (s === 0) pad(bgmBus, CH[bar], t, EIGHTH * 8, 0.035);
+    if (s === 0 || s === 4) tone(bgmBus, 'triangle', BASS[bar][s === 0 ? 0 : 1], t, EIGHTH * 1.8, 0.22);
+    if (s === 0 || s === 4) kick(bgmBus, t, 0.35);
+    if (s === 2 || s === 6) noise(bgmBus, t, 0.09, 0.12, 'bandpass', 1800);
+    if (bar === 7 && s >= 4) noise(bgmBus, t + EIGHTH / 2, 0.06, 0.07, 'bandpass', 2000);   // 마지막 마디 작은북 롤
+    noise(bgmBus, t, 0.03, s % 2 ? 0.05 : 0.025, 'highpass', 7000);
+  }
+  function tick(){
+    if (!ctx) return;
+    while (nextT < ctx.currentTime + 0.2){ schedule(nextT, step); step++; nextT += EIGHTH; }
+    // 음성 안내 중이거나 경기 중이면 배경음악을 작게
+    const target = vol() * 1.1 * (ctx.currentTime < duckUntil ? 0.25 : S.started ? 0.45 : 1);
+    bgmBus.gain.setTargetAtTime(target, ctx.currentTime, 0.25);
+  }
+  function apply(){
+    if ($('btnSnd')){ $('btnSnd').textContent = S.settings.bgm ? '음악 켬' : '음악 끔'; $('btnSnd').style.opacity = S.settings.bgm ? '1' : '0.6'; }
+    if (!ctx) return;
+    sfxBus.gain.value = vol() * 0.9;
+    const want = S.settings.bgm && document.visibilityState !== 'hidden';
+    if (want && !timer){ step = 0; nextT = ctx.currentTime + 0.1; timer = setInterval(tick, 40); }
+    if (!want && timer){ clearInterval(timer); timer = null; bgmBus.gain.setTargetAtTime(0, ctx.currentTime, 0.1); }
+  }
+  function unlock(){ if (!init()) return; if (ctx.state === 'suspended') ctx.resume().catch(()=>{}); apply(); }
+
+  /* --- 효과음 (전부 오리지널 합성) --- */
+  function fx(kind){
+    if (!S.settings.sfx || !ctx || ctx.state !== 'running') return;
+    const t = ctx.currentTime + 0.005;
+    if (kind === 'click'){ tone(sfxBus, 'sine', 81, t, 0.07, 0.35, 88); noise(sfxBus, t, 0.015, 0.08, 'highpass', 4000); }
+    else if (kind === 'card'){ tone(sfxBus, 'triangle', 57, t, 0.12, 0.45, 45); tone(sfxBus, 'sine', 93, t + 0.02, 0.1, 0.12); noise(sfxBus, t, 0.05, 0.12, 'lowpass', 900); }
+    else if (kind === 'tab'){ tone(sfxBus, 'sine', 76, t, 0.06, 0.25); tone(sfxBus, 'sine', 83, t + 0.05, 0.08, 0.22); }
+    else if (kind === 'toggle'){ tone(sfxBus, 'triangle', 79, t, 0.05, 0.25); tone(sfxBus, 'triangle', 86, t + 0.045, 0.07, 0.22); }
+    else if (kind === 'start'){ [65,69,72,77].forEach((m,i)=>pluck(sfxBus, m, t + i * 0.08, 0.35, 0.3)); pad(sfxBus, [65,69,72,77], t + 0.32, 0.7, 0.06); kick(sfxBus, t + 0.32, 0.5); noise(sfxBus, t + 0.32, 0.4, 0.08, 'highpass', 5000); }
+    else if (kind === 'end'){ [77,72,69,65].forEach((m,i)=>pluck(sfxBus, m, t + i * 0.11, 0.4, 0.26)); }
+  }
+  function duck(){ if (ctx) duckUntil = ctx.currentTime + 3; }
+
+  ['pointerdown','keydown','touchstart'].forEach(ev => document.addEventListener(ev, unlock, {capture:true, passive:true}));
+  document.addEventListener('visibilitychange', ()=>{ if (ctx) apply(); });
+  // 누르는 것마다 효과음: 카드 > 탭 > 체크박스 > 버튼
+  document.addEventListener('click', e=>{
+    const el = e.target.closest && e.target.closest('.crd, .nb, input[type=checkbox], button, .btn, .chip, .slot, .gitem, .deck, select');
+    if (!el || el.id === 'btnStart') return;   // 경기 시작은 팡파르가 따로 나와요
+    fx(el.matches('.crd, .slot') ? 'card' : el.matches('.nb') ? 'tab' : el.matches('input[type=checkbox]') ? 'toggle' : 'click');
+  }, true);
+  return {fx, duck, apply, unlock};
+})();
+window.SND = SND;
+function syncSoundUI(){
+  if (!$('chkBgm')) return;
+  $('chkBgm').checked = !!S.settings.bgm; $('chkSfx').checked = !!S.settings.sfx;
+  $('sndVol').value = S.settings.sndVol; $('sndVolV').textContent = S.settings.sndVol + '%';
+}
+if ($('chkBgm')){
+  syncSoundUI();
+  $('chkBgm').onchange = e=>{ S.settings.bgm = e.target.checked; saveSettings(); SND.unlock(); SND.apply(); };
+  $('chkSfx').onchange = e=>{ S.settings.sfx = e.target.checked; saveSettings(); };
+  $('sndVol').oninput = e=>{ S.settings.sndVol = +e.target.value; $('sndVolV').textContent = S.settings.sndVol + '%'; SND.apply(); };
+  $('sndVol').onchange = ()=> saveSettings();
+}
+if ($('btnSnd')) $('btnSnd').onclick = ()=>{ S.settings.bgm = !S.settings.bgm; saveSettings(); syncSoundUI(); SND.unlock(); SND.apply(); toast(S.settings.bgm ? '배경음악을 켰어요' : '배경음악을 껐어요'); };
+SND.apply();
+
 })();

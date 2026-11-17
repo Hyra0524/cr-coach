@@ -5,7 +5,9 @@ const root = path.join(__dirname, '..');
 const src = fs.readFileSync(path.join(root, 'src/data.js'), 'utf8');
 const m = {exports: {}};
 new Function('module', 'exports', src + '\n;module.exports = {CARD_DATA: typeof CARD_DATA!=="undefined"?CARD_DATA:null};')(m, m.exports);
-const keys = [...new Set((m.exports.CARD_DATA || []).map(r => r[10]).filter(Boolean))];
+// 기본 그림 + 진화 카드는 진화 그림(-ev1)도 (손패에 진화 그림이 보일 때 인식용)
+const rows = m.exports.CARD_DATA || [];
+const keys = [...new Set(rows.map(r => r[10]).filter(Boolean).concat(rows.filter(r => r[6] && r[10]).map(r => r[10] + '-ev1')))];
 const out = path.join(root, 'www/cards');
 fs.mkdirSync(out, {recursive: true});
 const BASES = ['https://cdn.royaleapi.com/static/img/cards-150/', 'https://cdn.royaleapi.com/static/img/cards/'];
